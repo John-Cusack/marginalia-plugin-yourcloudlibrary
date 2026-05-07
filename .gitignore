@@ -157,6 +157,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# Plugin-local probe captures (contain session cookies / book content)
+scratch/
+
 # Spyder project settings
 .spyderproject
 .spyproject

@@ -1,0 +1,53 @@
+name: yourcloudlibrary
+version: 0.1.0
+author: "MarginaliaAI"
+description: "YourCloudLibrary borrowed-book scraper. Captures library ebooks before borrow expires and ingests into the corpus."
+
+requires:
+  core_api: ">=0.2.0,<1.0.0"
+  pip:
+    - "playwright>=1.40"
+    - "python-dotenv>=1.0"
+    - "pydantic>=2.0"
+    - "structlog>=24.0"
+    - "httpx>=0.28"
+  setup_commands:
+    - "playwright install chromium"
+
+permissions:
+  network: egress
+  network_allowlist:
+    - "epub.yourcloudlibrary.com"
+    - "yourcloudlibrary.com"
+    - "*.yourcloudlibrary.com"
+  subprocess: true
+  filesystem: read_write_plugin_data
+  ingest: true
+
+provides:
+  document_types:
+    - id: ycl_book
+      default_chunker: prose_window
+
+  mcp_tools:
+    - id: ycl.auth_status
+      entry: ycl.tools.auth_status:handler
+      description: "Report whether the plugin has YCL session cookies; tells the user how to log in if not."
+    - id: ycl.scrape_book
+      entry: ycl.tools.scrape_book:handler
+      description: "Scrape a borrowed book from YourCloudLibrary via the YCL API and save plain text to disk."
+    - id: ycl.ingest_book
+      entry: ycl.tools.ingest_book:handler
+      description: "Scrape (if needed) and ingest a borrowed book into the corpus by book_id. Idempotent."
+    - id: ycl.check_book
+      entry: ycl.tools.check_book:handler
+      description: "Check borrow status, expiration, scrape state, and ingestion state for a book."
+    - id: ycl.list_books
+      entry: ycl.tools.list_books:handler
+      description: "List known borrows for the current library (active by default)."
+    - id: ycl.record_borrow
+      entry: ycl.tools.record_borrow:handler
+      description: "Register a newly borrowed book with its expiration date, without scraping."
+    - id: ycl.forget_book
+      entry: ycl.tools.forget_book:handler
+      description: "Remove a borrow record from the local store. Does not delete corpus passages."
