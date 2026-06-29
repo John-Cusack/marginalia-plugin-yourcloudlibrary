@@ -53,6 +53,21 @@ class Manifest:
 
 
 @dataclass(frozen=True)
+class Chapter:
+    """One scraped reading-order item with its plain text and toc location.
+
+    ``title`` is the manifest ``toc`` entry for this href when one exists
+    (cover/colophon items often have none). ``index`` is the position in the
+    manifest ``readingOrder`` — stable document order for navigation.
+    """
+
+    index: int
+    href: str
+    title: str | None
+    text: str
+
+
+@dataclass(frozen=True)
 class ScrapeResult:
     """Output of ``scrape_book``."""
 
@@ -62,3 +77,4 @@ class ScrapeResult:
     text: str
     chapter_count: int
     total_chars: int
+    chapters: list[Chapter] = field(default_factory=list)

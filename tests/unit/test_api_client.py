@@ -12,7 +12,12 @@ import httpx
 import pytest
 
 from ycl.api.client import YclClient
-from ycl.api.errors import AuthExpiredError, BookNotBorrowedError, YclApiError
+from ycl.api.errors import (
+    AuthExpiredError,
+    BookNotBorrowedError,
+    NotAuthenticatedError,
+    YclApiError,
+)
 from ycl.api.scraper import scrape_book
 from ycl.api.types import LibraryInfo
 
@@ -195,3 +200,158 @@ async def test_get_book_raises_api_error_on_5xx():
     with pytest.raises(YclApiError):
         async with client:
             await client.get_book("onc5689")
+
+
+# --- P2.2: JSON/HTML validation, no reliance on one URL substring --------
+
+
+async def test_get_book_html_200_is_auth_expired_without_home_url():
+    """A 200 that serves HTML where JSON is expected = expired session, even
+    when the landing URL is not the hardcoded /en/home marketing path."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text="<!DOCTYPE html><html><body>Please sign in</body></html>",
+            headers={"content-type": "text/html; charset=utf-8"},
+        )
+
+    client = _client_with_handler(handler)
+    with pytest.raises(AuthExpiredError):
+        async with client:
+            await client.get_book("onc5689")
+
+
+async def test_get_book_malformed_json_is_typed_api_error():
+    """A non-HTML 200 that isn't valid JSON must surface as YclApiError, not a
+    raw JSONDecodeError escaping the typed-error model."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text="{not valid json",
+            headers={"content-type": "application/json"},
+        )
+
+    client = _client_with_handler(handler)
+    with pytest.raises(YclApiError):
+        async with client:
+            await client.get_book("onc5689")
+
+
+async def test_get_manifest_html_lookup_is_auth_expired():
+    def handler(request: httpx.Request) -> httpx.Response:
+        # The lookup endpoint bounces to a login page instead of a URL string.
+        return httpx.Response(
+            200,
+            text="<html><head><title>Login</title></head></html>",
+            headers={"content-type": "text/html"},
+        )
+
+    client = _client_with_handler(handler)
+    with pytest.raises(AuthExpiredError):
+        async with client:
+            await client.get_manifest(ISBN)
+
+
+# --- P2.3: from_cookie_store requires __session_PROD ---------------------
+
+
+def _write_cookies(path, cookies: list[dict]) -> None:
+    path.write_text(json.dumps(cookies), encoding="utf-8")
+
+
+def _config_cookie_value() -> str:
+    payload = {
+        "library_info": {
+            "name": "Palm Beach County Library System",
+            "urlName": "PalmBeachCountyLibrarySystem",
+        },
+        "library_config": {"reaktor_patron_id": 42},
+        "login_info": {"barcode": "D0001", "library": "uuid", "state": "FL"},
+    }
+    return base64.b64encode(json.dumps(payload).encode("utf-8")).decode("ascii")
+
+
+def test_from_cookie_store_requires_session_cookie(tmp_path):
+    path = tmp_path / "cookies.json"
+    # Only __config_PROD present — decodes fine, but no session JWT.
+    _write_cookies(
+        path,
+        [
+            {
+                "name": "__config_PROD",
+                "value": _config_cookie_value(),
+                "domain": ".yourcloudlibrary.com",
+            }
+        ],
+    )
+    with pytest.raises(NotAuthenticatedError):
+        YclClient.from_cookie_store(path)
+
+
+async def test_from_cookie_store_succeeds_with_session_cookie(tmp_path):
+    path = tmp_path / "cookies.json"
+    _write_cookies(
+        path,
+        [
+            {
+                "name": "__config_PROD",
+                "value": _config_cookie_value(),
+                "domain": ".yourcloudlibrary.com",
+            },
+            {
+                "name": "__session_PROD",
+                "value": "header.payload.sig",
+                "domain": ".yourcloudlibrary.com",
+            },
+        ],
+    )
+    client = YclClient.from_cookie_store(path)
+    assert client.library.url_name == "PalmBeachCountyLibrarySystem"
+    await client.close()
+
+
+# --- P2.5: chapter titles from toc carried into scrape result ------------
+
+
+async def test_scrape_book_carries_chapter_titles_from_toc():
+    manifest_body = {
+        "metadata": {"title": "Four Views"},
+        "readingOrder": [
+            {"href": "OEBPS/cover.xhtml", "type": "application/xhtml+xml"},
+            {"href": CHAPTER1_HREF, "type": "application/xhtml+xml"},
+        ],
+        "toc": [
+            # Cover has no toc entry; chapter 1 does (with a fragment anchor).
+            {"href": "OEBPS/chapter01.xhtml#start", "title": "Chapter One"},
+        ],
+    }
+    cover_body = base64.b64encode(
+        b"<html><body><p>Cover art</p></body></html>"
+    ).decode("ascii")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if "detail/onc5689" in path:
+            return httpx.Response(200, json=_book_payload())
+        if path == f"/manifest/{ISBN}":
+            return httpx.Response(200, text=json.dumps(MANIFEST_URL))
+        if str(request.url) == MANIFEST_URL:
+            return httpx.Response(200, json=manifest_body)
+        if "cover.xhtml" in path:
+            return httpx.Response(200, text=cover_body)
+        if CHAPTER1_HREF in path:
+            return httpx.Response(200, text=CHAPTER1_BODY)
+        return httpx.Response(404, text=f"unmocked: {request.url}")
+
+    client = _client_with_handler(handler)
+    async with client:
+        result = await scrape_book(client, "onc5689")
+
+    assert len(result.chapters) == 2
+    titles = {c.href: c.title for c in result.chapters}
+    assert titles["OEBPS/cover.xhtml"] is None
+    assert titles["OEBPS/chapter01.xhtml"] == "Chapter One"
+    # Indices preserve manifest reading order.
+    assert [c.index for c in result.chapters] == [0, 1]

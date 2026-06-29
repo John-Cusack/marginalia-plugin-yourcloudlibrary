@@ -8,7 +8,7 @@ import structlog
 
 from .client import YclClient, assert_borrowed
 from .text import xhtml_to_text
-from .types import Book, ScrapeResult
+from .types import Book, Chapter, Manifest, ScrapeResult
 
 log = structlog.get_logger(__name__)
 
@@ -75,14 +75,58 @@ async def scrape_known_book(
 
     await asyncio.gather(*(_fetch(i) for i in range(len(manifest.reading_order))))
 
-    pieces = [text for text in chapters if text and text.strip()]
-    full_text = "\n\n".join(pieces)
+    # Map each reading-order href to its toc title so passages stay navigable
+    # ("which chapter is this from?") instead of being a flat wall of text.
+    toc_titles = _toc_titles(manifest)
+    structured: list[Chapter] = []
+    for idx, item in enumerate(manifest.reading_order):
+        text = chapters[idx]
+        if not (text and text.strip()):
+            continue
+        href_key = item.href.split("#", 1)[0].lstrip("/")
+        structured.append(
+            Chapter(
+                index=idx,
+                href=item.href,
+                title=toc_titles.get(href_key),
+                text=text,
+            )
+        )
+
+    full_text = "\n\n".join(c.text for c in structured)
 
     return ScrapeResult(
         book_id=book.item_id,
         isbn=book.isbn,
         title=book.title or manifest.title,
         text=full_text,
-        chapter_count=sum(1 for c in chapters if c and c.strip()),
+        chapter_count=len(structured),
         total_chars=len(full_text),
+        chapters=structured,
     )
+
+
+def _toc_titles(manifest: Manifest) -> dict[str, str]:
+    """Flatten the manifest ``toc`` into ``{href_without_fragment: title}``.
+
+    Readium toc entries can nest (``children``) and carry fragment anchors
+    (``OEBPS/ch01.xhtml#sec2``); we key by the bare href so they line up with
+    ``readingOrder`` items. The first title wins for a given href.
+    """
+    out: dict[str, str] = {}
+
+    def _walk(entries: object) -> None:
+        if not isinstance(entries, list):
+            return
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            href = entry.get("href")
+            title = entry.get("title")
+            if isinstance(href, str) and isinstance(title, str) and title.strip():
+                key = href.split("#", 1)[0].lstrip("/")
+                out.setdefault(key, title.strip())
+            _walk(entry.get("children"))
+
+    _walk((manifest.raw or {}).get("toc"))
+    return out

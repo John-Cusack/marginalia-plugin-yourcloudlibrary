@@ -6,7 +6,7 @@ from research_engine.plugins.sdk import tool
 
 from .._paths import COOKIE_PATH
 from .._time import utcnow
-from ..api.cookies import decode_config_cookie
+from ..api.cookies import decode_config_cookie, session_expiry_status
 from ..api.errors import NotAuthenticatedError
 from ..borrows import BorrowStore
 from ..session.cookies import CookieStore
@@ -85,7 +85,7 @@ async def handler(
 
     books.sort(key=lambda b: (b["expired"], b.get("days_remaining") or 0))
 
-    return {
+    out = {
         "library_id": library_key,
         "library_name": library_name,
         "count": len(books),
@@ -94,3 +94,6 @@ async def handler(
         "ingested_count": ingested_count,
         "books": books,
     }
+    if cookies:
+        out.update(session_expiry_status(cookies, now=now))
+    return out

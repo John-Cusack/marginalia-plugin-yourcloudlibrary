@@ -31,6 +31,33 @@ def _err(error_type: str, message: str, **extra) -> dict:
     return {"status": "error", "error_type": error_type, "message": message, **extra}
 
 
+async def _chunk_with_chapters(chunker, text: str, chapters: list, metadata: dict):
+    """Chunk text so each passage carries its chapter location when known.
+
+    With chapter structure (a fresh scrape) each chapter is chunked
+    independently with ``chapter_index``/``chapter_title`` merged into its
+    metadata, then passage positions are renumbered into one monotonic
+    document-order sequence. Without it (re-ingesting cached text, which is a
+    flat blob) we fall back to chunking the whole document with base metadata.
+    """
+    if not chapters:
+        return await chunker.chunk(text, metadata)
+
+    drafts: list = []
+    for chapter in chapters:
+        chapter_meta = {
+            **metadata,
+            "chapter_index": chapter.index,
+            "chapter_title": chapter.title,
+        }
+        drafts.extend(await chunker.chunk(chapter.text, chapter_meta))
+    # ProseWindowChunker restarts ``position`` at 0 per call; renumber so the
+    # corpus keeps a single document-order sequence across chapters.
+    for position, draft in enumerate(drafts):
+        draft.position = position
+    return drafts
+
+
 @tool(
     id="ycl.ingest_book",
     description=(
@@ -131,6 +158,7 @@ async def handler(
     # Acquire text — reuse cached file unless rescrape requested or no cache.
     isbn: str | None = None
     chapter_count: int | None = None
+    scraped_chapters: list = []
     if rescrape or not text_path.exists():
         try:
             async with client:
@@ -161,18 +189,19 @@ async def handler(
         scraped_title = result.title
         isbn = result.isbn
         chapter_count = result.chapter_count
+        scraped_chapters = result.chapters
         text_path.parent.mkdir(parents=True, exist_ok=True)
         text_path.write_text(text, encoding="utf-8")
     else:
         await client.close()
         text = text_path.read_text(encoding="utf-8")
-        scraped_title = next(
-            (line.strip() for line in text.splitlines() if line.strip()),
-            f"YCL Book {book_id}",
-        )[:200]
         record = store.get(library_key, book_id) or {}
         isbn = record.get("isbn")
         chapter_count = record.get("chapter_count")
+        # Use the real title recorded at scrape time. Deriving it from the
+        # first non-blank line of the cached text picked up cover/chapter
+        # junk and polluted search results.
+        scraped_title = record.get("title") or f"YCL Book {book_id}"
 
     if not text.strip():
         return _err("empty_text", "No text available.", book_id=book_id)
@@ -202,7 +231,7 @@ async def handler(
     }
 
     chunker = ProseWindowChunker()
-    drafts = await chunker.chunk(text, metadata)
+    drafts = await _chunk_with_chapters(chunker, text, scraped_chapters, metadata)
 
     result = await ingestion.ingest_drafts(
         title=final_title,
