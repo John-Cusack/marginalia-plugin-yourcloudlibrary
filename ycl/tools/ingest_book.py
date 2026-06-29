@@ -9,6 +9,7 @@ from research_engine.services.ingestion.chunking.prose_window import ProseWindow
 from .._config import ConfigError
 from .._config import load as load_config
 from .._paths import text_path_for
+from .._textcache import read_chapter_sidecar, write_text_cache
 from .._time import resolve_expires_at, to_iso, utcnow
 from ..api import (
     AuthExpiredError,
@@ -190,18 +191,23 @@ async def handler(
         isbn = result.isbn
         chapter_count = result.chapter_count
         scraped_chapters = result.chapters
-        text_path.parent.mkdir(parents=True, exist_ok=True)
-        text_path.write_text(text, encoding="utf-8")
+        write_text_cache(library_key, book_id, result)
     else:
         await client.close()
         text = text_path.read_text(encoding="utf-8")
         record = store.get(library_key, book_id) or {}
         isbn = record.get("isbn")
-        chapter_count = record.get("chapter_count")
-        # Use the real title recorded at scrape time. Deriving it from the
-        # first non-blank line of the cached text picked up cover/chapter
-        # junk and polluted search results.
-        scraped_title = record.get("title") or f"YCL Book {book_id}"
+        # Rebuild chapter structure (and recover the title) from the cache
+        # sidecar so a re-ingest off disk keeps the same per-chapter passage
+        # metadata a fresh scrape would produce. Empty for pre-sidecar caches.
+        cached_title, scraped_chapters = read_chapter_sidecar(
+            library_key, book_id, text
+        )
+        chapter_count = record.get("chapter_count") or (len(scraped_chapters) or None)
+        # Prefer the title recorded at scrape time, then the sidecar's title,
+        # then a generic placeholder. Never sniff cover/chapter junk from the
+        # text body (P2.4).
+        scraped_title = record.get("title") or cached_title or f"YCL Book {book_id}"
 
     if not text.strip():
         return _err("empty_text", "No text available.", book_id=book_id)

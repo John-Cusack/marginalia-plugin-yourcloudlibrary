@@ -27,19 +27,17 @@ SESSION_COOKIE = "__session_PROD"
 SESSION_WARN_DAYS = 7
 
 
-def _b64_padded_decode(value: str) -> bytes:
-    """Decode a base64 string that may be missing trailing ``=`` padding."""
+def _b64_padded_decode(value: str, *, urlsafe: bool = False) -> bytes:
+    """Decode a base64 string that may be missing trailing ``=`` padding.
+
+    Set ``urlsafe=True`` for the base64url alphabet used by JWT segments.
+    """
     padded = value + "=" * (-len(value) % 4)
+    decoder = base64.urlsafe_b64decode if urlsafe else base64.b64decode
     try:
-        return base64.b64decode(padded)
+        return decoder(padded)
     except (binascii.Error, ValueError) as exc:
         raise ValueError(f"failed to base64-decode value: {exc}") from exc
-
-
-def _b64url_padded_decode(value: str) -> bytes:
-    """Decode a base64url string (JWT segment) that may lack ``=`` padding."""
-    padded = value + "=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode(padded)
 
 
 def _find_cookie(cookies: Iterable[dict], name: str) -> dict | None:
@@ -72,8 +70,8 @@ def session_expiry(cookies: Iterable[dict]) -> datetime | None:
     if len(parts) != 3:
         return None
     try:
-        payload = json.loads(_b64url_padded_decode(parts[1]))
-    except (binascii.Error, ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        payload = json.loads(_b64_padded_decode(parts[1], urlsafe=True))
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
         return None
     exp = payload.get("exp") if isinstance(payload, dict) else None
     if not isinstance(exp, (int, float)) or isinstance(exp, bool):
@@ -99,8 +97,11 @@ def session_expiry_status(cookies: Iterable[dict], *, now: datetime) -> dict:
             "session_expired": None,
         }
     delta = expiry - now
-    days = int(delta.total_seconds() // 86400)
     expired = expiry <= now
+    # Floor division of a negative delta would report e.g. -1 days for an
+    # already-expired session, which reads as nonsense next to the "expires
+    # in" framing — clamp at 0 and let session_expired carry the past state.
+    days = max(0, int(delta.total_seconds() // 86400))
     out: dict = {
         "session_expires_at": to_iso(expiry),
         "session_expires_in_days": days,

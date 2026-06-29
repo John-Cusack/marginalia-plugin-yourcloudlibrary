@@ -80,8 +80,16 @@ patron id) is read from the `__config_PROD` cookie at runtime.
 ├── borrows.json                       # loan registry, partitioned by library urlName
 ├── borrows.json.lock                  # fcntl lock sidecar
 ├── cookies.json                       # YCL session cookies (re-issued by ycl.cli.login)
-└── extracted/{library_slug}/{book_id}.txt
+└── extracted/{library_slug}/
+    ├── {book_id}.txt                   # canonical plain-text extract
+    └── {book_id}.chapters.json         # chapter structure sidecar (title + toc per chapter)
 ```
+
+The `.chapters.json` sidecar records the book title and each chapter's
+`index`/`href`/`title`/`length`, so a re-ingest from the on-disk cache rebuilds
+the same per-chapter passage metadata (`chapter_index`/`chapter_title`) a fresh
+scrape produces — without a network round-trip. Books scraped before the
+sidecar existed simply fall back to flat-text chunking.
 
 All timestamps are stored as UTC ISO 8601 with `Z` suffix.
 

@@ -7,7 +7,8 @@ from research_engine.plugins.sdk import tool
 
 from .._config import ConfigError
 from .._config import load as load_config
-from .._paths import EXTRACTED_DIR, text_path_for
+from .._paths import text_path_for
+from .._textcache import write_text_cache
 from .._time import resolve_expires_at, to_iso, utcnow
 from ..api import (
     AuthExpiredError,
@@ -133,10 +134,8 @@ async def handler(
             chapter_count=result.chapter_count,
         )
 
-    EXTRACTED_DIR.mkdir(parents=True, exist_ok=True)
+    write_text_cache(library_key, book_id, result)
     text_path = text_path_for(library_key, book_id)
-    text_path.parent.mkdir(parents=True, exist_ok=True)
-    text_path.write_text(result.text, encoding="utf-8")
 
     resolved_expires_at, estimated = resolve_expires_at(
         explicit_expires_at=expires_at,

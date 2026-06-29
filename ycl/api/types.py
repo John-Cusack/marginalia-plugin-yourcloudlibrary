@@ -52,6 +52,12 @@ class Manifest:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+# Separator used to join chapter texts into the flat book text. Anything that
+# splits the flat text back into chapters (the on-disk cache reconstruction)
+# must use the same value, so it lives here as the single source of truth.
+CHAPTER_SEPARATOR = "\n\n"
+
+
 @dataclass(frozen=True)
 class Chapter:
     """One scraped reading-order item with its plain text and toc location.
@@ -69,12 +75,27 @@ class Chapter:
 
 @dataclass(frozen=True)
 class ScrapeResult:
-    """Output of ``scrape_book``."""
+    """Output of ``scrape_book``.
+
+    Only ``chapters`` hold text; ``text``/``total_chars``/``chapter_count`` are
+    derived on demand so the full book isn't resident twice (once joined, once
+    per-chapter).
+    """
 
     book_id: str
     isbn: str
     title: str
-    text: str
-    chapter_count: int
-    total_chars: int
     chapters: list[Chapter] = field(default_factory=list)
+
+    @property
+    def text(self) -> str:
+        """Full book text — chapter texts joined in reading order."""
+        return CHAPTER_SEPARATOR.join(c.text for c in self.chapters)
+
+    @property
+    def total_chars(self) -> int:
+        return len(self.text)
+
+    @property
+    def chapter_count(self) -> int:
+        return len(self.chapters)

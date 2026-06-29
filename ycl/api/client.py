@@ -176,6 +176,16 @@ class YclClient:
 
         url = f"{manifest.content_base_url}/{item.href.lstrip('/')}"
         resp = await self._get(url)
+        # Chapter bodies are base64-wrapped XHTML. If the session lapses
+        # mid-scrape (or the CDN serves a 200 HTML error/login page), base64-
+        # decoding that HTML yields silent mojibake that would be ingested as
+        # "chapter text". Catch the HTML bounce here too, not just on the JSON
+        # endpoints, so it surfaces as a re-login prompt instead of corruption.
+        if _looks_like_html(resp):
+            raise AuthExpiredError(
+                f"GET {url} returned HTML where chapter content was expected — "
+                "session likely expired; re-run ycl.cli.login."
+            )
         return decode_chapter_body(resp.text)
 
     # ----- internals -------------------------------------------------------
@@ -183,22 +193,24 @@ class YclClient:
     async def _get_json(self, url: str, **kwargs: Any) -> Any:
         """GET ``url`` and parse the body as JSON.
 
-        Where we expect JSON, an HTML body is the unauthenticated-bounce
-        signature (the server serves the marketing/login page with a 200
-        instead of the API payload). Detect that and raise
-        :class:`AuthExpiredError` rather than letting a raw
-        ``JSONDecodeError`` escape the typed-error model. A non-HTML body
-        that still fails to parse is a genuine API fault (``YclApiError``).
+        Parse first: a valid JSON body is returned regardless of how the
+        server labels its Content-Type (some CDNs mislabel JSON), so a good
+        response never trips the auth heuristics. Only when parsing fails do
+        we disambiguate: an HTML body is the unauthenticated-bounce signature
+        (the server served a marketing/login page with a 200) →
+        :class:`AuthExpiredError`; anything else is a genuine API fault →
+        :class:`YclApiError`. Either way no raw ``JSONDecodeError`` escapes
+        the typed-error model.
         """
         resp = await self._get(url, **kwargs)
-        if _looks_like_html(resp):
-            raise AuthExpiredError(
-                f"GET {url} returned HTML where JSON was expected — session "
-                "likely expired; re-run ycl.cli.login."
-            )
         try:
             return resp.json()
         except (json.JSONDecodeError, ValueError) as exc:
+            if _looks_like_html(resp):
+                raise AuthExpiredError(
+                    f"GET {url} returned HTML where JSON was expected — session "
+                    "likely expired; re-run ycl.cli.login."
+                ) from exc
             raise YclApiError(
                 f"GET {url} returned a non-JSON body: {resp.text[:200]!r}"
             ) from exc
@@ -254,20 +266,28 @@ _HTML_HEAD_MARKERS = ("<!doctype html", "<html")
 
 
 def _looks_like_html(resp: httpx.Response) -> bool:
-    """True if ``resp`` is an HTML document (by Content-Type or body head)."""
-    content_type = resp.headers.get("content-type", "").lower()
-    if "html" in content_type:
-        return True
+    """True if ``resp`` is an HTML document.
+
+    Body-driven: a real bounce serves a document opening with ``<!doctype
+    html`` / ``<html``. The Content-Type is only a corroborating signal — and
+    only when the body isn't already obviously JSON — so a JSON payload that a
+    CDN mislabels as ``text/html`` is never misread as a bounce.
+    """
     head = resp.text[:256].lstrip().lower()
-    return head.startswith(_HTML_HEAD_MARKERS)
+    if head.startswith(_HTML_HEAD_MARKERS):
+        return True
+    content_type = resp.headers.get("content-type", "").lower()
+    return "html" in content_type and not head.startswith(("{", "[", '"'))
 
 
 def _bounced_to_marketing(resp: httpx.Response) -> bool:
-    """Heuristic: did this request land on the public marketing/home page?"""
-    final = str(resp.url)
-    return "yourcloudlibrary.com/en/home" in final or final.endswith(
-        "yourcloudlibrary.com/"
-    )
+    """Heuristic: did this request land on the public marketing/home page?
+
+    A cheap secondary signal to the authoritative "expected JSON/chapter, got
+    HTML" check. Scoped to the marketing ``/en/home`` landing path so a normal
+    redirect to some other host root can't be misread as an expired session.
+    """
+    return "yourcloudlibrary.com/en/home" in str(resp.url)
 
 
 def assert_borrowed(book: Book) -> None:

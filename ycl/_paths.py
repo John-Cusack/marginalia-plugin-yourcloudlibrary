@@ -15,6 +15,11 @@ def text_path_for(library_id: str, book_id: str) -> Path:
     return EXTRACTED_DIR / library_id / f"{book_id}.txt"
 
 
+def chapters_path_for(library_id: str, book_id: str) -> Path:
+    """Sidecar holding chapter structure for the cached text (see _textcache)."""
+    return EXTRACTED_DIR / library_id / f"{book_id}.chapters.json"
+
+
 def partial_path_for(library_id: str, book_id: str) -> Path:
     """Checkpoint path for an in-progress scrape; one page per write."""
     return EXTRACTED_DIR / library_id / f"{book_id}.partial.txt"

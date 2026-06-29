@@ -254,6 +254,56 @@ async def test_get_manifest_html_lookup_is_auth_expired():
             await client.get_manifest(ISBN)
 
 
+async def test_get_book_valid_json_with_html_content_type_still_parses():
+    """A CDN that mislabels a valid JSON body as text/html must not be read as
+    an expired session — parse succeeds, so no AuthExpiredError."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=json.dumps(_book_payload()),
+            headers={"content-type": "text/html; charset=utf-8"},
+        )
+
+    client = _client_with_handler(handler)
+    async with client:
+        book = await client.get_book("onc5689")
+    assert book.isbn == ISBN
+
+
+async def test_chapter_fetch_html_bounce_is_auth_expired():
+    """A 200 HTML page served for a chapter must raise rather than be
+    base64-'decoded' into mojibake and ingested as text."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if "detail/onc5689" in path:
+            return httpx.Response(200, json=_book_payload())
+        if path == f"/manifest/{ISBN}":
+            return httpx.Response(200, text=json.dumps(MANIFEST_URL))
+        if str(request.url) == MANIFEST_URL:
+            return httpx.Response(
+                200,
+                json={
+                    "metadata": {"title": "Four Views"},
+                    "readingOrder": [
+                        {"href": CHAPTER1_HREF, "type": "application/xhtml+xml"}
+                    ],
+                },
+            )
+        # The chapter GET lands on a login page (200 HTML), not base64 XHTML.
+        return httpx.Response(
+            200,
+            text="<!DOCTYPE html><html><body>session expired</body></html>",
+            headers={"content-type": "text/html"},
+        )
+
+    client = _client_with_handler(handler)
+    with pytest.raises(AuthExpiredError):
+        async with client:
+            await scrape_book(client, "onc5689")
+
+
 # --- P2.3: from_cookie_store requires __session_PROD ---------------------
 
 
@@ -355,3 +405,34 @@ async def test_scrape_book_carries_chapter_titles_from_toc():
     assert titles["OEBPS/chapter01.xhtml"] == "Chapter One"
     # Indices preserve manifest reading order.
     assert [c.index for c in result.chapters] == [0, 1]
+
+
+# --- bounce/HTML heuristics (direct) -------------------------------------
+
+
+def _resp(text: str, *, url: str, content_type: str = "application/json"):
+    return httpx.Response(
+        200, text=text, headers={"content-type": content_type}, request=httpx.Request("GET", url)
+    )
+
+
+def test_looks_like_html_body_driven():
+    from ycl.api.client import _looks_like_html
+
+    assert _looks_like_html(_resp("<!DOCTYPE html><html></html>", url="https://x/"))
+    # Valid JSON wins even if Content-Type lies.
+    assert not _looks_like_html(
+        _resp('{"book": {}}', url="https://x/", content_type="text/html")
+    )
+    assert not _looks_like_html(_resp('"https://x/manifest"', url="https://x/"))
+
+
+def test_bounced_to_marketing_scoped_to_en_home():
+    from ycl.api.client import _bounced_to_marketing
+
+    assert _bounced_to_marketing(_resp("x", url="https://www.yourcloudlibrary.com/en/home"))
+    # A deep API URL or a bare host root must NOT be flagged as a bounce.
+    assert not _bounced_to_marketing(
+        _resp("x", url="https://epubservice.yourcloudlibrary.com/content/u/manifest.json")
+    )
+    assert not _bounced_to_marketing(_resp("x", url="https://images.yourcloudlibrary.com/"))

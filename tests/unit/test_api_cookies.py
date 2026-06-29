@@ -164,6 +164,8 @@ def test_session_expiry_status_flags_expired():
     cookies = [{"name": "__session_PROD", "value": _make_jwt(exp=exp)}]
     status = session_expiry_status(cookies, now=now)
     assert status["session_expired"] is True
+    # Clamped at 0 rather than a confusing negative "expires in -1 days".
+    assert status["session_expires_in_days"] == 0
     assert "expired" in status["session_warning"].lower()
 
 
