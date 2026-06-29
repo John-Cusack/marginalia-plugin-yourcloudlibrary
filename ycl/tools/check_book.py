@@ -64,6 +64,7 @@ async def handler(
                 live_status = {
                     "isbn": book.isbn,
                     "title": book.title,
+                    "author": book.author,
                     "status": book.status,
                     "can_read": book.can_read,
                     "page_count": book.page_count,

@@ -85,4 +85,7 @@ async def scrape_known_book(
         text=full_text,
         chapter_count=sum(1 for c in chapters if c and c.strip()),
         total_chars=len(full_text),
+        author=book.author,
+        subjects=book.subjects,
+        description=book.description,
     )

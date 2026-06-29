@@ -122,6 +122,7 @@ marginalia-plugin-yourcloudlibrary/
 │       ├── scrape_book.py
 │       ├── ingest_book.py
 │       ├── check_book.py
+│       ├── sync_loans.py
 │       ├── list_books.py
 │       ├── record_borrow.py
 │       └── forget_book.py
@@ -131,11 +132,14 @@ marginalia-plugin-yourcloudlibrary/
 │   ├── probe_reader_passive.py
 │   └── probe_*.py               # other one-off discovery scripts
 └── tests/
+    ├── conftest.py                # stubs the host research_engine SDK
     └── unit/
         ├── test_api_client.py     # mocked httpx, full pipeline
+        ├── test_api_loans.py      # mocked httpx, get_loans + author parsing
         ├── test_api_cookies.py    # __config_PROD decode + jar conversion
         ├── test_api_text.py       # XHTML → text, base64 decode
         ├── test_borrows.py        # store + concurrency
+        ├── test_sync_loans.py     # ycl.sync_loans handler
         ├── test_config.py
         └── test_timestamps.py
 ```
@@ -149,8 +153,8 @@ marginalia-plugin-yourcloudlibrary/
 - `permissions`: `network: egress`, `subprocess: true`,
   `filesystem: read_write_plugin_data`, `ingest: true`.
 - `provides.document_types`: `ycl_book` with `default_chunker: prose_window`.
-- `provides.mcp_tools`: 7 tools (auth_status, scrape_book, ingest_book,
-  check_book, list_books, record_borrow, forget_book).
+- `provides.mcp_tools`: 8 tools (auth_status, scrape_book, ingest_book,
+  check_book, sync_loans, list_books, record_borrow, forget_book).
 
 ### `ycl/api/client.py` — YclClient
 
@@ -198,6 +202,7 @@ All use `@tool(id, description, input_schema)` from
 | `ycl.scrape_book` | `book_id` | Scrape via API, write `extracted/{slug}/{book_id}.txt`, upsert BorrowStore. Fail-fast on `BookNotBorrowedError`. |
 | `ycl.ingest_book` | `book_id` | Idempotent via `find_existing(source=...)`. Re-uses on-disk text unless `rescrape`. Chunks with `ProseWindowChunker`, calls `ingest_drafts(...)`. |
 | `ycl.check_book` | `book_id` | Calls live API for current loan status (skippable via `live=false`); merges with BorrowStore + disk + corpus. |
+| `ycl.sync_loans` | — | POSTs the `mybooks.current` action, walks all segments, upserts each active loan into BorrowStore with its real `dueDate` as a non-estimated `expires_at`. |
 | `ycl.list_books` | — | Iterate BorrowStore; default active-only. |
 | `ycl.record_borrow` | `book_id` | Manual record with explicit expires_at. |
 | `ycl.forget_book` | `book_id` | Remove BorrowStore entry; corpus passages and on-disk text are kept. |
@@ -239,10 +244,17 @@ YclApiError
   handling.
 - `test_borrows.py` — JSON roundtrip, library partitioning, expiration
   arithmetic, 16-thread concurrent-write race.
+- `test_api_loans.py` — mocked httpx: `get_loans` POSTs the `.current`
+  action, walks segments, parses `patronItems`; plus `get_book`
+  author/subjects/description extraction and the pure helpers.
+- `test_sync_loans.py` — `ycl.sync_loans` handler against a fake client +
+  tmp BorrowStore: real `dueDate` overwrites an estimate, garbage dates
+  fall back gracefully, auth errors map to tool errors.
 - `test_config.py`, `test_timestamps.py` — env loading + UTC mandate +
   expires_at resolution.
 
-46 tests, run in ~0.2s.
+65 tests, run in ~0.6s. Tool-handler tests stub the host
+`research_engine` SDK via `tests/conftest.py`.
 
 ## Verification (end-to-end)
 
@@ -266,10 +278,10 @@ YclApiError
 
 ## Open questions for the reviewer
 
-1. **Auto-discovery of active loans.** A future `ycl.sync_loans` tool
-   could call the YCL "My Loans" page (likely also a Remix loader) and
-   auto-populate BorrowStore with accurate `expires_at` values. Worth
-   doing in v0.2.
+1. **Auto-discovery of active loans.** ✅ Done — `ycl.sync_loans` populates
+   BorrowStore with accurate `expires_at` from the live loan list. Note the
+   "My Loans" data is **not** a `_data` loader GET as guessed here; it's a
+   Remix *action* (POST) on the `mybooks.current` route. See IMPL_NOTES.md.
 2. **Per-borrow versioning vs duplicate documents.** Currently a
    re-borrow with `force_reingest=True` creates a duplicate. Should we
    instead append to the same document with a borrow-ordinal in

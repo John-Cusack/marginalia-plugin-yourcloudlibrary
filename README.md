@@ -69,6 +69,7 @@ patron id) is read from the `__config_PROD` cookie at runtime.
 - `ycl.scrape_book` — fetch a borrowed book's full text and save to disk.
 - `ycl.ingest_book` — fetch (if needed) and ingest into the corpus as `ycl_book`.
 - `ycl.check_book` — borrow + disk + corpus state for one book; calls the live API by default.
+- `ycl.sync_loans` — pull the live list of active loans and populate the borrow store with each loan's *real* expiration (answers "what do I have out right now?").
 - `ycl.list_books` — list known borrows for the current library.
 - `ycl.record_borrow` — register a loan without scraping (for queueing).
 - `ycl.forget_book` — remove a borrow record (corpus passages are kept).

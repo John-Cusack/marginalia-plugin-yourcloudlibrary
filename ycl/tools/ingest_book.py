@@ -131,6 +131,9 @@ async def handler(
     # Acquire text — reuse cached file unless rescrape requested or no cache.
     isbn: str | None = None
     chapter_count: int | None = None
+    author: str | None = None
+    subjects: list[str] = []
+    description: str | None = None
     if rescrape or not text_path.exists():
         try:
             async with client:
@@ -161,6 +164,9 @@ async def handler(
         scraped_title = result.title
         isbn = result.isbn
         chapter_count = result.chapter_count
+        author = result.author
+        subjects = result.subjects
+        description = result.description
         text_path.parent.mkdir(parents=True, exist_ok=True)
         text_path.write_text(text, encoding="utf-8")
     else:
@@ -173,6 +179,9 @@ async def handler(
         record = store.get(library_key, book_id) or {}
         isbn = record.get("isbn")
         chapter_count = record.get("chapter_count")
+        author = record.get("author")
+        subjects = record.get("subjects") or []
+        description = record.get("description")
 
     if not text.strip():
         return _err("empty_text", "No text available.", book_id=book_id)
@@ -191,6 +200,9 @@ async def handler(
         "library_name": client.library.name,
         "book_id": book_id,
         "ycl_title": final_title,
+        "author": author,
+        "subjects": subjects,
+        "description": description,
         "isbn": isbn,
         "borrowed_at": resolved_borrowed_at,
         "expires_at": resolved_expires_at,
@@ -216,6 +228,9 @@ async def handler(
         library_id=library_key,
         book_id=book_id,
         title=final_title,
+        author=author,
+        subjects=subjects,
+        description=description,
         isbn=isbn,
         borrowed_at=resolved_borrowed_at,
         expires_at=resolved_expires_at,
@@ -232,6 +247,7 @@ async def handler(
         "book_id": book_id,
         "library_id": library_key,
         "title": final_title,
+        "author": author,
         "isbn": isbn,
         "document_id": result["document_id"],
         "passage_count": result["passage_count"],
