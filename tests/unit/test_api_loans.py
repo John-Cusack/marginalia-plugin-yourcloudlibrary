@@ -111,6 +111,41 @@ async def test_get_loans_walks_all_segments():
     assert [loan.item_id for loan in loans] == ["seg1", "seg2", "seg3"]
 
 
+async def test_get_loans_dedups_when_server_ignores_segment():
+    # Server claims 3 segments but ignores the param and re-serves the same page.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "patronItems": [_loan_item("onc1"), _loan_item("onc2")],
+                "totalSegments": 3,
+            },
+        )
+
+    client = _client_with_handler(handler)
+    async with client:
+        loans = await client.get_loans()
+    # Deduped by item_id despite the multi-segment claim.
+    assert [loan.item_id for loan in loans] == ["onc1", "onc2"]
+
+
+async def test_get_loans_stops_on_empty_segment():
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        segment = int(request.url.params.get("segment", "1"))
+        items = [_loan_item("onc1")] if segment == 1 else []
+        return httpx.Response(200, json={"patronItems": items, "totalSegments": 9})
+
+    client = _client_with_handler(handler)
+    async with client:
+        loans = await client.get_loans()
+    assert [loan.item_id for loan in loans] == ["onc1"]
+    # Stopped after the first empty page rather than paging to segment 9.
+    assert calls["n"] == 2
+
+
 async def test_get_loans_empty_when_no_active_loans():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"patronItems": [], "totalSegments": 1})
@@ -195,3 +230,12 @@ def test_extract_author_returns_none_when_absent():
 def test_extract_subjects_handles_non_dict():
     assert _extract_subjects(None) == []
     assert _extract_subjects([1, 2, 3]) == []
+
+
+def test_extract_subjects_dedups_whitespace_variants():
+    cats = {
+        "a": {"name": "Missions"},
+        "b": {"name": " Missions "},
+        "c": {"name": "Ecclesiology"},
+    }
+    assert _extract_subjects(cats) == ["Missions", "Ecclesiology"]

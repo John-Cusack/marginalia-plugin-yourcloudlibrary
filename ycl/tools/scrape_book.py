@@ -20,6 +20,7 @@ from ..api import (
     scrape_book as api_scrape_book,
 )
 from ..borrows import BorrowStore
+from ._common import effective_expires_at
 
 log = structlog.get_logger(__name__)
 
@@ -138,8 +139,11 @@ async def handler(
     text_path.parent.mkdir(parents=True, exist_ok=True)
     text_path.write_text(result.text, encoding="utf-8")
 
+    # Don't clobber an authoritative expiry (e.g. one ycl.sync_loans wrote)
+    # with a fresh estimate when the caller didn't pass an explicit value.
+    existing_record = store.get(library_key, book_id)
     resolved_expires_at, estimated = resolve_expires_at(
-        explicit_expires_at=expires_at,
+        explicit_expires_at=effective_expires_at(expires_at, existing_record),
         explicit_borrowed_at=borrowed_at,
         borrow_days=cfg.fallback_borrow_days,
         now=now,
@@ -150,6 +154,9 @@ async def handler(
         library_id=library_key,
         book_id=book_id,
         title=title or result.title,
+        author=result.author,
+        subjects=result.subjects,
+        description=result.description,
         isbn=result.isbn,
         borrowed_at=resolved_borrowed_at,
         expires_at=resolved_expires_at,

@@ -21,6 +21,7 @@ from ..api import (
     scrape_book as api_scrape_book,
 )
 from ..borrows import BorrowStore
+from ._common import effective_expires_at
 
 log = structlog.get_logger(__name__)
 
@@ -104,6 +105,7 @@ async def handler(
     library_key = client.library.url_name or "unknown"
     store = BorrowStore()
     now = utcnow()
+    existing_record = store.get(library_key, book_id) or {}
     text_path = text_path_for(library_key, book_id)
     source = str(text_path.resolve())
 
@@ -176,18 +178,19 @@ async def handler(
             (line.strip() for line in text.splitlines() if line.strip()),
             f"YCL Book {book_id}",
         )[:200]
-        record = store.get(library_key, book_id) or {}
-        isbn = record.get("isbn")
-        chapter_count = record.get("chapter_count")
-        author = record.get("author")
-        subjects = record.get("subjects") or []
-        description = record.get("description")
+        isbn = existing_record.get("isbn")
+        chapter_count = existing_record.get("chapter_count")
+        author = existing_record.get("author")
+        subjects = existing_record.get("subjects") or []
+        description = existing_record.get("description")
 
     if not text.strip():
         return _err("empty_text", "No text available.", book_id=book_id)
 
+    # Prefer an authoritative stored expiry (e.g. from ycl.sync_loans) over a
+    # fresh estimate when the caller didn't pass an explicit expires_at.
     resolved_expires_at, estimated = resolve_expires_at(
-        explicit_expires_at=expires_at,
+        explicit_expires_at=effective_expires_at(expires_at, existing_record),
         explicit_borrowed_at=borrowed_at,
         borrow_days=cfg.fallback_borrow_days,
         now=now,

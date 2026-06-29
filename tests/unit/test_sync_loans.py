@@ -114,10 +114,17 @@ async def test_sync_loans_handles_unparseable_due_date(store, monkeypatch):
     result = await handler()
 
     loan_out = result["loans"][0]
-    assert loan_out["expires_at"] is None
+    # An unparseable dueDate falls back to an estimate rather than a missing
+    # expiry, so the book still reads as actively checked out.
+    assert loan_out["expires_at"] is not None
     assert loan_out["expires_at_is_estimated"] is True
-    # Title still recorded even without a usable expiry.
-    assert store.get(LIBRARY_KEY, "onc1")["title"] == "Mystery"
+    assert loan_out["days_remaining"] is not None
+    record = store.get(LIBRARY_KEY, "onc1")
+    assert record["title"] == "Mystery"
+    assert record["expires_at"] is not None
+    assert record["expires_at_is_estimated"] is True
+    # The record is active (not erroneously reported as expired/returned).
+    assert store.is_active(LIBRARY_KEY, "onc1") is True
 
 
 async def test_sync_loans_skips_items_without_id(store, monkeypatch):
@@ -131,6 +138,76 @@ async def test_sync_loans_skips_items_without_id(store, monkeypatch):
 
     assert result["active_loan_count"] == 1
     assert result["loans"][0]["book_id"] == "onc2"
+
+
+async def test_sync_loans_does_not_clobber_real_title_with_untitled(store, monkeypatch):
+    # A prior ingest recorded the correct title.
+    store.upsert(library_id=LIBRARY_KEY, book_id="onc5689", title="Real Title")
+    # The loans payload omitted a title, so _loan_from_item defaulted it.
+    loans = [Loan(item_id="onc5689", title="Untitled", due_date="2099-01-01T00:00:00Z")]
+    _install_client(monkeypatch, _FakeClient(loans))
+
+    await handler()
+
+    assert store.get(LIBRARY_KEY, "onc5689")["title"] == "Real Title"
+
+
+async def test_sync_loans_reconciles_returned_loan(store, monkeypatch):
+    # A previously-synced loan (has a loan_id) with a still-future expiry.
+    store.upsert(
+        library_id=LIBRARY_KEY,
+        book_id="onc_gone",
+        title="Returned Early",
+        loan_id="loan-gone",
+        expires_at="2099-01-01T00:00:00Z",
+        expires_at_is_estimated=False,
+    )
+    # A manually-recorded book (no loan_id) that must NOT be touched.
+    store.upsert(
+        library_id=LIBRARY_KEY,
+        book_id="onc_manual",
+        title="Manual",
+        expires_at="2099-01-01T00:00:00Z",
+        expires_at_is_estimated=False,
+    )
+    # The live list no longer contains onc_gone.
+    loans = [Loan(item_id="onc_live", title="Still Out", due_date="2099-02-01T00:00:00Z")]
+    _install_client(monkeypatch, _FakeClient(loans))
+
+    result = await handler()
+
+    assert result["returned_count"] == 1
+    assert result["returned_book_ids"] == ["onc_gone"]
+    gone = store.get(LIBRARY_KEY, "onc_gone")
+    assert gone["returned"] is True
+    assert gone["returned_at"] is not None
+    assert store.is_active(LIBRARY_KEY, "onc_gone") is False
+    # Manually-recorded book untouched and still active.
+    manual = store.get(LIBRARY_KEY, "onc_manual")
+    assert "returned" not in manual
+    assert store.is_active(LIBRARY_KEY, "onc_manual") is True
+
+
+async def test_sync_loans_reborrow_clears_returned_flag(store, monkeypatch):
+    store.upsert(
+        library_id=LIBRARY_KEY,
+        book_id="onc5689",
+        title="Came Back",
+        loan_id="loan-old",
+        returned=True,
+        returned_at="2026-06-01T00:00:00Z",
+        expires_at="2026-06-01T00:00:00Z",
+        expires_at_is_estimated=False,
+    )
+    loans = [Loan(item_id="onc5689", title="Came Back", due_date="2099-03-01T00:00:00Z")]
+    _install_client(monkeypatch, _FakeClient(loans))
+
+    await handler()
+
+    record = store.get(LIBRARY_KEY, "onc5689")
+    assert "returned" not in record
+    assert "returned_at" not in record
+    assert store.is_active(LIBRARY_KEY, "onc5689") is True
 
 
 async def test_sync_loans_not_authenticated(monkeypatch):

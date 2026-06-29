@@ -145,15 +145,26 @@ class YclClient:
             raise YclApiError("library url_name unknown — cookie may be malformed")
         url = f"{EBOOK_HOST}/library/{slug}/mybooks/current"
         loans: list[Loan] = []
+        seen: set[str] = set()
         segment = 1
         while True:
             params = {"segment": segment, "pageSize": page_size, "_data": LOANS_ROUTE}
             resp = await self._post(url, params=params, data={"format": "", "sort": sort})
             body = resp.json()
-            for item in body.get("patronItems") or []:
-                loans.append(_loan_from_item(item))
+            items = body.get("patronItems") or []
+            for item in items:
+                loan = _loan_from_item(item)
+                # Dedup by item_id: if the server ignores `segment` and re-serves
+                # page 1, we'd otherwise append the same loans once per segment.
+                if loan.item_id and loan.item_id in seen:
+                    continue
+                if loan.item_id:
+                    seen.add(loan.item_id)
+                loans.append(loan)
             total_segments = _safe_int(body.get("totalSegments")) or 1
-            if segment >= total_segments:
+            # Stop on the last segment, or if a segment came back empty (nothing
+            # more to page through — and a guard against a bad totalSegments).
+            if segment >= total_segments or not items:
                 break
             segment += 1
         return loans
@@ -282,8 +293,13 @@ def _extract_subjects(content_categories: Any) -> list[str]:
         if not isinstance(entry, dict):
             continue
         name = entry.get("name")
-        if isinstance(name, str) and name.strip() and name not in subjects:
-            subjects.append(name.strip())
+        if not isinstance(name, str):
+            continue
+        cleaned = name.strip()
+        # Compare the cleaned form against the (already-cleaned) stored names so
+        # whitespace-only variants ("Missions" vs " Missions ") collapse to one.
+        if cleaned and cleaned not in subjects:
+            subjects.append(cleaned)
     return subjects
 
 

@@ -4,8 +4,14 @@ Answers "what do I have out right now?" by hitting YCL's My-Books loans
 endpoint and writing the *real* ``expires_at`` (the loan's ``dueDate``) into
 each borrow record, clearing the ``expires_at_is_estimated`` guess. New loans
 the plugin had never seen are added; loans it already knew about are updated
-in place. Existing records that are no longer on loan are left untouched (use
-``ycl.list_books``/``ycl.check_book`` to see their expired state).
+in place. Records that previously came from a sync (they carry a ``loan_id``)
+but are no longer on the live list are reconciled as ``returned`` so the store
+stops reporting a returned book as active. Manually-recorded books (no
+``loan_id``) are left untouched.
+
+The whole write — every active-loan upsert plus the return reconciliation —
+runs inside a single ``BorrowStore.mutate()`` transaction (one locked read +
+one write), rather than one rewrite per loan.
 """
 
 from __future__ import annotations
@@ -13,7 +19,9 @@ from __future__ import annotations
 import structlog
 from research_engine.plugins.sdk import tool
 
-from .._time import from_iso, to_iso, utcnow
+from .._config import ConfigError
+from .._config import load as load_config
+from .._time import days_until, from_iso, resolve_expires_at, to_iso, utcnow
 from ..api import (
     AuthExpiredError,
     NotAuthenticatedError,
@@ -72,6 +80,11 @@ async def handler(
     **_clients,
 ) -> dict:
     try:
+        cfg = load_config()
+    except ConfigError as exc:
+        return _err("config", str(exc))
+
+    try:
         client = YclClient.from_cookie_store()
     except NotAuthenticatedError as exc:
         return _err(
@@ -84,6 +97,7 @@ async def handler(
     library_name = client.library.name
     store = BorrowStore()
     now = utcnow()
+    now_iso = to_iso(now)
 
     try:
         async with client:
@@ -96,38 +110,74 @@ async def handler(
         log.exception("sync_loans_api_error", error=str(exc))
         return _err("api_error", str(exc))
 
+    live_ids = {loan.item_id for loan in loans if loan.item_id}
     synced: list[dict] = []
-    for loan in loans:
-        if not loan.item_id:
-            log.warning("sync_loans_skipped_loan_without_item_id", loan=loan.raw)
-            continue
-        expires_at = _normalize_due_date(loan.due_date)
-        fields: dict = {
-            "title": loan.title,
-            "media_type": loan.media_type,
-            "loan_id": loan.loan_id,
-        }
-        if loan.author:
-            fields["author"] = loan.author
-        if expires_at is not None:
-            fields["expires_at"] = expires_at
-            # The whole point of the sync: this is the authoritative value.
-            fields["expires_at_is_estimated"] = False
-        store.upsert(library_id=library_key, book_id=loan.item_id, **fields)
-        synced.append(
-            {
-                "book_id": loan.item_id,
-                "title": loan.title,
-                "author": loan.author,
-                "media_type": loan.media_type,
-                "expires_at": expires_at,
-                "expires_at_is_estimated": expires_at is None,
-                "days_remaining": store.days_remaining(
-                    library_key, loan.item_id, now=now
-                ),
-                "can_renew": loan.can_renew,
-            }
-        )
+
+    # One locked transaction: upsert every active loan, then reconcile returns.
+    with store.mutate() as state:
+        shelf = state.setdefault(library_key, {})
+
+        for loan in loans:
+            if not loan.item_id:
+                log.warning("sync_loans_skipped_loan_without_item_id", loan=loan.raw)
+                continue
+            # Route the dueDate through the central resolver: a parseable date
+            # is authoritative (estimated=False); a missing/garbage one becomes
+            # a flagged estimate so the book still reads as active, and the
+            # output row below stays consistent with what we store.
+            resolved_expires_at, estimated = resolve_expires_at(
+                explicit_expires_at=_normalize_due_date(loan.due_date),
+                explicit_borrowed_at=None,
+                borrow_days=cfg.fallback_borrow_days,
+                now=now,
+            )
+            record = shelf.get(loan.item_id, {})
+            record.update(
+                {
+                    "library_id": library_key,
+                    "book_id": loan.item_id,
+                    "media_type": loan.media_type,
+                    "loan_id": loan.loan_id,
+                    "expires_at": resolved_expires_at,
+                    "expires_at_is_estimated": estimated,
+                }
+            )
+            if loan.author:
+                record["author"] = loan.author
+            # Don't overwrite a real stored title with the "Untitled" default.
+            if loan.title and loan.title != "Untitled":
+                record["title"] = loan.title
+            # A re-borrow of a previously-returned book: it's active again.
+            record.pop("returned", None)
+            record.pop("returned_at", None)
+            shelf[loan.item_id] = record
+
+            synced.append(
+                {
+                    "book_id": loan.item_id,
+                    "title": record.get("title"),
+                    "author": loan.author,
+                    "media_type": loan.media_type,
+                    "expires_at": resolved_expires_at,
+                    "expires_at_is_estimated": estimated,
+                    "days_remaining": days_until(resolved_expires_at, now),
+                    "can_renew": loan.can_renew,
+                }
+            )
+
+        # Reconcile returns: a record that came from a prior sync (has a
+        # loan_id) but is absent from the live list was returned. Leave
+        # manually-recorded books (no loan_id) alone.
+        returned_book_ids: list[str] = []
+        for book_id, record in shelf.items():
+            if (
+                book_id not in live_ids
+                and record.get("loan_id")
+                and not record.get("returned")
+            ):
+                record["returned"] = True
+                record["returned_at"] = now_iso
+                returned_book_ids.append(book_id)
 
     synced.sort(key=lambda b: (b.get("days_remaining") is None, b.get("days_remaining") or 0))
 
@@ -136,5 +186,7 @@ async def handler(
         "library_id": library_key,
         "library_name": library_name,
         "active_loan_count": len(synced),
+        "returned_count": len(returned_book_ids),
+        "returned_book_ids": returned_book_ids,
         "loans": synced,
     }
