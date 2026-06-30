@@ -17,7 +17,12 @@ import structlog
 
 from .._paths import COOKIE_PATH
 from ..session.cookies import CookieStore
-from .cookies import cookies_to_jar, decode_config_cookie
+from .cookies import (
+    SESSION_COOKIE,
+    cookies_to_jar,
+    decode_config_cookie,
+    has_session_cookie,
+)
 from .errors import AuthExpiredError, BookNotBorrowedError, NotAuthenticatedError, YclApiError
 from .types import Book, LibraryInfo, Loan, Manifest, ReadingOrderItem
 
@@ -79,6 +84,14 @@ class YclClient:
             raise NotAuthenticatedError(
                 f"No cookie file at {path}. Run `python -m ycl.cli.login` once."
             )
+        # The session cookie carries the JWT every authenticated request needs;
+        # __config_PROD alone (library identity) is not enough to talk to the
+        # API. Fail early and clearly rather than 401-ing on the first GET.
+        if not has_session_cookie(cookies):
+            raise NotAuthenticatedError(
+                f"{SESSION_COOKIE} cookie missing from {path}; the saved session "
+                "is incomplete. Run `python -m ycl.cli.login` again."
+            )
         library = decode_config_cookie(cookies)
         jar = cookies_to_jar(cookies)
         return cls(cookie_jar=jar, library_info=library, catalog_name=catalog_name)
@@ -105,9 +118,8 @@ class YclClient:
             raise YclApiError("library url_name unknown — cookie may be malformed")
         url = f"{EBOOK_HOST}/library/{slug}/detail/{book_id}"
         params = {"_data": DETAIL_ROUTE}
-        resp = await self._get(url, params=params)
-        data = resp.json()
-        book_raw = data.get("book") or {}
+        data = await self._get_json(url, params=params)
+        book_raw = data.get("book") or {} if isinstance(data, dict) else {}
         if not book_raw:
             raise YclApiError(
                 f"detail loader returned no book object for book_id={book_id!r}"
@@ -173,13 +185,20 @@ class YclClient:
         """Resolve the Readium WebPub manifest for ``isbn``."""
         if not isbn:
             raise YclApiError("missing ISBN")
-        # Step 1: lookup endpoint returns a JSON-encoded URL string.
+        # Step 1: lookup endpoint returns a JSON-encoded URL string (or a bare
+        # URL). An HTML body here means the session bounced to a login page.
         lookup_url = f"{EPUBSERVICE_HOST}/manifest/{isbn}"
         resp = await self._get(lookup_url, params={"catalogName": self.catalog_name})
+        if _looks_like_html(resp):
+            raise AuthExpiredError(
+                f"GET {lookup_url} returned HTML where a manifest URL was "
+                "expected — session likely expired; re-run ycl.cli.login."
+            )
         manifest_url = _coerce_url_payload(resp.text)
         # Step 2: fetch the manifest itself.
-        resp = await self._get(manifest_url)
-        body = json.loads(resp.text)
+        body = await self._get_json(manifest_url)
+        if not isinstance(body, dict):
+            raise YclApiError(f"manifest for ISBN={isbn!r} was not a JSON object")
 
         reading_order = [
             ReadingOrderItem(href=item["href"], type=item.get("type", ""))
@@ -208,9 +227,44 @@ class YclClient:
 
         url = f"{manifest.content_base_url}/{item.href.lstrip('/')}"
         resp = await self._get(url)
+        # Chapter bodies are base64-wrapped XHTML. If the session lapses
+        # mid-scrape (or the CDN serves a 200 HTML error/login page), base64-
+        # decoding that HTML yields silent mojibake that would be ingested as
+        # "chapter text". Catch the HTML bounce here too, not just on the JSON
+        # endpoints, so it surfaces as a re-login prompt instead of corruption.
+        if _looks_like_html(resp):
+            raise AuthExpiredError(
+                f"GET {url} returned HTML where chapter content was expected — "
+                "session likely expired; re-run ycl.cli.login."
+            )
         return decode_chapter_body(resp.text)
 
     # ----- internals -------------------------------------------------------
+
+    async def _get_json(self, url: str, **kwargs: Any) -> Any:
+        """GET ``url`` and parse the body as JSON.
+
+        Parse first: a valid JSON body is returned regardless of how the
+        server labels its Content-Type (some CDNs mislabel JSON), so a good
+        response never trips the auth heuristics. Only when parsing fails do
+        we disambiguate: an HTML body is the unauthenticated-bounce signature
+        (the server served a marketing/login page with a 200) →
+        :class:`AuthExpiredError`; anything else is a genuine API fault →
+        :class:`YclApiError`. Either way no raw ``JSONDecodeError`` escapes
+        the typed-error model.
+        """
+        resp = await self._get(url, **kwargs)
+        try:
+            return resp.json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            if _looks_like_html(resp):
+                raise AuthExpiredError(
+                    f"GET {url} returned HTML where JSON was expected — session "
+                    "likely expired; re-run ycl.cli.login."
+                ) from exc
+            raise YclApiError(
+                f"GET {url} returned a non-JSON body: {resp.text[:200]!r}"
+            ) from exc
 
     async def _get(self, url: str, **kwargs: Any) -> httpx.Response:
         try:
@@ -232,11 +286,13 @@ class YclClient:
             raise AuthExpiredError(
                 f"{method} {url} returned {resp.status_code}; re-run ycl.cli.login."
             )
-        # The unauth bounce: server says 200 but we landed on the marketing
-        # page. Treat as auth-expired so the caller can prompt for re-login.
-        if "yourcloudlibrary.com/en/home" in str(resp.url):
+        # The unauth bounce: server says 200 but we landed on a marketing/login
+        # page. The authoritative signal is "expected JSON, got HTML" (handled
+        # in _get_json / get_manifest); the landing-URL check below is a cheap
+        # secondary heuristic, not the sole detector.
+        if _bounced_to_marketing(resp):
             raise AuthExpiredError(
-                f"{method} {url} bounced to marketing — session likely expired."
+                f"{method} {url} bounced to {resp.url} — session likely expired."
             )
         if resp.status_code >= 400:
             raise YclApiError(
@@ -323,8 +379,43 @@ def _coerce_url_payload(body: str) -> str:
     bare URL — accept both and normalize to the unquoted URL."""
     s = body.strip()
     if s.startswith('"') and s.endswith('"'):
-        return json.loads(s)
+        try:
+            return json.loads(s)
+        except json.JSONDecodeError as exc:
+            raise YclApiError(
+                f"manifest lookup returned an unparseable JSON string: {s[:200]!r}"
+            ) from exc
     return s
+
+
+# Markers that identify an HTML document served where JSON was expected — the
+# fingerprint of an unauthenticated bounce to a marketing/login page.
+_HTML_HEAD_MARKERS = ("<!doctype html", "<html")
+
+
+def _looks_like_html(resp: httpx.Response) -> bool:
+    """True if ``resp`` is an HTML document.
+
+    Body-driven: a real bounce serves a document opening with ``<!doctype
+    html`` / ``<html``. The Content-Type is only a corroborating signal — and
+    only when the body isn't already obviously JSON — so a JSON payload that a
+    CDN mislabels as ``text/html`` is never misread as a bounce.
+    """
+    head = resp.text[:256].lstrip().lower()
+    if head.startswith(_HTML_HEAD_MARKERS):
+        return True
+    content_type = resp.headers.get("content-type", "").lower()
+    return "html" in content_type and not head.startswith(("{", "[", '"'))
+
+
+def _bounced_to_marketing(resp: httpx.Response) -> bool:
+    """Heuristic: did this request land on the public marketing/home page?
+
+    A cheap secondary signal to the authoritative "expected JSON/chapter, got
+    HTML" check. Scoped to the marketing ``/en/home`` landing path so a normal
+    redirect to some other host root can't be misread as an expired session.
+    """
+    return "yourcloudlibrary.com/en/home" in str(resp.url)
 
 
 def assert_borrowed(book: Book) -> None:

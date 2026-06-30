@@ -5,7 +5,8 @@ from __future__ import annotations
 from research_engine.plugins.sdk import tool
 
 from .._paths import COOKIE_PATH
-from ..api.cookies import decode_config_cookie
+from .._time import utcnow
+from ..api.cookies import decode_config_cookie, session_expiry_status
 from ..api.errors import NotAuthenticatedError
 from ..session.cookies import CookieStore
 
@@ -48,4 +49,5 @@ async def handler(**_clients) -> dict:
         "library_uuid": library.library_uuid,
         "patron_id": library.reaktor_patron_id,
         "barcode_last4": (library.barcode or "")[-4:] if library.barcode else None,
+        **session_expiry_status(cookies, now=utcnow()),
     }

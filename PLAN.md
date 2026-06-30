@@ -296,6 +296,11 @@ YclApiError
    model.
 5. **`catalogName=3m.us` hardcoding.** Stable for US libraries; non-US
    may differ. If we encounter a non-US user, surface as an env var.
-6. **Login re-issuance.** When cookies expire, the plugin currently
-   surfaces an error and tells the user to re-run the CLI. Could we
-   detect impending expiration and warn ahead of time? Not currently.
+6. **Login re-issuance.** When cookies expire, the plugin surfaces a typed
+   `AuthExpiredError` and tells the user to re-run the CLI. It *also* warns
+   ahead of time: `ycl.auth_status` and `ycl.list_books` decode the
+   `__session_PROD` JWT's `exp` claim and report `session_expires_in_days`,
+   adding a `session_warning` once the session is within
+   `SESSION_WARN_DAYS` (7) of expiry. Expiry detection on the request path
+   no longer hinges on one hardcoded URL substring: any response that serves
+   HTML where JSON is expected is treated as an expired session.

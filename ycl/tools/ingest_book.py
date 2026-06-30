@@ -9,6 +9,7 @@ from research_engine.services.ingestion.chunking.prose_window import ProseWindow
 from .._config import ConfigError
 from .._config import load as load_config
 from .._paths import text_path_for
+from .._textcache import read_chapter_sidecar, write_text_cache
 from .._time import resolve_expires_at, to_iso, utcnow
 from ..api import (
     AuthExpiredError,
@@ -30,6 +31,33 @@ READER_URL_TEMPLATE = "https://epub.yourcloudlibrary.com/read/{book_id}"
 
 def _err(error_type: str, message: str, **extra) -> dict:
     return {"status": "error", "error_type": error_type, "message": message, **extra}
+
+
+async def _chunk_with_chapters(chunker, text: str, chapters: list, metadata: dict):
+    """Chunk text so each passage carries its chapter location when known.
+
+    With chapter structure (a fresh scrape) each chapter is chunked
+    independently with ``chapter_index``/``chapter_title`` merged into its
+    metadata, then passage positions are renumbered into one monotonic
+    document-order sequence. Without it (re-ingesting cached text, which is a
+    flat blob) we fall back to chunking the whole document with base metadata.
+    """
+    if not chapters:
+        return await chunker.chunk(text, metadata)
+
+    drafts: list = []
+    for chapter in chapters:
+        chapter_meta = {
+            **metadata,
+            "chapter_index": chapter.index,
+            "chapter_title": chapter.title,
+        }
+        drafts.extend(await chunker.chunk(chapter.text, chapter_meta))
+    # ProseWindowChunker restarts ``position`` at 0 per call; renumber so the
+    # corpus keeps a single document-order sequence across chapters.
+    for position, draft in enumerate(drafts):
+        draft.position = position
+    return drafts
 
 
 @tool(
@@ -133,6 +161,7 @@ async def handler(
     # Acquire text — reuse cached file unless rescrape requested or no cache.
     isbn: str | None = None
     chapter_count: int | None = None
+    scraped_chapters: list = []
     author: str | None = None
     subjects: list[str] = []
     description: str | None = None
@@ -166,20 +195,30 @@ async def handler(
         scraped_title = result.title
         isbn = result.isbn
         chapter_count = result.chapter_count
+        scraped_chapters = result.chapters
         author = result.author
         subjects = result.subjects
         description = result.description
-        text_path.parent.mkdir(parents=True, exist_ok=True)
-        text_path.write_text(text, encoding="utf-8")
+        write_text_cache(library_key, book_id, result)
     else:
         await client.close()
         text = text_path.read_text(encoding="utf-8")
-        scraped_title = next(
-            (line.strip() for line in text.splitlines() if line.strip()),
-            f"YCL Book {book_id}",
-        )[:200]
         isbn = existing_record.get("isbn")
-        chapter_count = existing_record.get("chapter_count")
+        # Rebuild chapter structure (and recover the title) from the cache
+        # sidecar so a re-ingest off disk keeps the same per-chapter passage
+        # metadata a fresh scrape would produce. Empty for pre-sidecar caches.
+        cached_title, scraped_chapters = read_chapter_sidecar(
+            library_key, book_id, text
+        )
+        chapter_count = existing_record.get("chapter_count") or (
+            len(scraped_chapters) or None
+        )
+        # Prefer the title recorded at scrape time, then the sidecar's title,
+        # then a generic placeholder. Never sniff cover/chapter junk from the
+        # text body (P2.4).
+        scraped_title = (
+            existing_record.get("title") or cached_title or f"YCL Book {book_id}"
+        )
         author = existing_record.get("author")
         subjects = existing_record.get("subjects") or []
         description = existing_record.get("description")
@@ -217,7 +256,7 @@ async def handler(
     }
 
     chunker = ProseWindowChunker()
-    drafts = await chunker.chunk(text, metadata)
+    drafts = await _chunk_with_chapters(chunker, text, scraped_chapters, metadata)
 
     result = await ingestion.ingest_drafts(
         title=final_title,

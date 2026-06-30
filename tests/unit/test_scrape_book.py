@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import pytest
 
+import ycl._paths as paths
 import ycl.tools.scrape_book as mod
-from ycl.api.types import ScrapeResult
+from ycl.api.types import Chapter, ScrapeResult
 from ycl.borrows import BorrowStore
 
 LIBRARY_KEY = "PalmBeachCountyLibrarySystem"
@@ -35,13 +36,15 @@ class _FakeClient:
 
 
 def _scrape_result(book_id="onc5689"):
+    # ScrapeResult derives text/chapter_count/total_chars from its chapters.
     return ScrapeResult(
         book_id=book_id,
         isbn="9780310522744",
         title="Four Views",
-        text="Four Views\n\nBody text here.",
-        chapter_count=2,
-        total_chars=27,
+        chapters=[
+            Chapter(index=0, href="OEBPS/c1.xhtml", title="Ch1", text="Four Views"),
+            Chapter(index=1, href="OEBPS/c2.xhtml", title="Ch2", text="Body text here."),
+        ],
         author="Doe, Jane",
         subjects=["Ecclesiology", "Missions"],
         description="<p>blurb</p>",
@@ -50,11 +53,9 @@ def _scrape_result(book_id="onc5689"):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    extracted = tmp_path / "extracted"
-    monkeypatch.setattr(mod, "EXTRACTED_DIR", extracted)
-    monkeypatch.setattr(
-        mod, "text_path_for", lambda lib, bid: extracted / lib / f"{bid}.txt"
-    )
+    # Patch the EXTRACTED_DIR global (read dynamically by text_path_for and the
+    # text-cache helpers) so both the scrape write and its sidecar land in tmp.
+    monkeypatch.setattr(paths, "EXTRACTED_DIR", tmp_path / "extracted")
     store = BorrowStore(tmp_path / "borrows.json")
     monkeypatch.setattr(mod, "BorrowStore", lambda: store)
     monkeypatch.setattr(
