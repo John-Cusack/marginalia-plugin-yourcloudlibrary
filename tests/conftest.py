@@ -41,9 +41,36 @@ def _install_research_engine_stub() -> None:
         "research_engine.services.ingestion.chunking.prose_window"
     )
 
-    class ProseWindowChunker:  # pragma: no cover - trivial stub
-        async def chunk(self, text, metadata):
-            return [{"text": text, "metadata": metadata}]
+    class ProseWindowChunker:  # pragma: no cover - lightweight stand-in
+        """Faithful-enough stand-in for the host chunker.
+
+        Mirrors the real contract the handler relies on: it accepts window
+        kwargs and yields passage-draft-like objects with a *settable*
+        ``position`` and a readable ``metadata`` (the host returns pydantic
+        ``PassageDraft`` objects; ``_chunk_with_chapters`` renumbers
+        ``draft.position`` across chapters). It also splits long text into
+        several windows so multi-passage paths are actually exercised.
+        """
+
+        def __init__(self, max_tokens: int = 500, overlap_tokens: int = 50) -> None:
+            self.max_tokens = max_tokens
+            self.overlap_tokens = overlap_tokens
+
+        async def chunk(self, text, metadata=None):
+            if not text or not text.strip():
+                return []
+            window = max(1, self.max_tokens * 4)  # ~4 chars/token, like the real one
+            pieces = [text[i : i + window] for i in range(0, len(text), window)]
+            return [
+                types.SimpleNamespace(
+                    text=piece,
+                    position=i,
+                    metadata=metadata or {},
+                    token_count=max(1, len(piece) // 4),
+                    locator={"byte_start": 0, "byte_end": len(piece.encode())},
+                )
+                for i, piece in enumerate(pieces)
+            ]
 
     prose_window.ProseWindowChunker = ProseWindowChunker
     chunking.prose_window = prose_window
