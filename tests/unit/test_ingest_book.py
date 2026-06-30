@@ -1,12 +1,11 @@
 """Tests for the ycl.ingest_book handler.
 
-Covers two areas merged from the P1 and P2 work:
+Covers two areas merged from the P1 and P2 work, all against the stubbed
+research_engine SDK from tests/conftest.py (whose ProseWindowChunker yields
+passage-draft-like objects with .position/.metadata, faithful to the host):
   * P1 — cache-path metadata (author/subjects/description) + authoritative
-    expiry preservation. These run against the stubbed research_engine SDK
-    (incl. a trivial ProseWindowChunker) from tests/conftest.py.
-  * P2 — chapter-aware chunking (P2.5) and the cached-title fix (P2.4). The
-    chunking assertions need the *real* ProseWindowChunker (passage objects
-    with .position/.metadata), so they skip when only the stub is available.
+    expiry preservation.
+  * P2 — chapter-aware chunking (P2.5) and the cached-title fix (P2.4).
 """
 
 from __future__ import annotations
@@ -20,22 +19,8 @@ from ycl.borrows import BorrowStore
 
 LIBRARY_KEY = "PalmBeachCountyLibrarySystem"
 
-# The stub ProseWindowChunker (conftest) takes no kwargs and yields plain
-# dicts; the real one accepts window sizes and yields passage objects with
-# .position/.metadata. Detect which we have so chunk-structure tests only run
-# against the real implementation (inside the Marginalia harness).
 from research_engine.services.ingestion.chunking.prose_window import (  # noqa: E402
     ProseWindowChunker,
-)
-
-try:
-    ProseWindowChunker(max_tokens=8, overlap_tokens=1)
-    _HAS_REAL_CHUNKER = True
-except TypeError:
-    _HAS_REAL_CHUNKER = False
-
-needs_real_chunker = pytest.mark.skipif(
-    not _HAS_REAL_CHUNKER, reason="needs the real ProseWindowChunker (harness only)"
 )
 
 # Long enough that each chapter chunks into several passages, so the global
@@ -105,7 +90,6 @@ def env(tmp_path, monkeypatch):
 # --- P2.5: per-chapter chunking carries chapter location -------------------
 
 
-@needs_real_chunker
 async def test_chunk_with_chapters_attaches_titles_and_renumbers():
     chunker = ProseWindowChunker(max_tokens=80, overlap_tokens=10)
     chapters = [
@@ -125,7 +109,6 @@ async def test_chunk_with_chapters_attaches_titles_and_renumbers():
     assert first.metadata["chapter_index"] == 0
 
 
-@needs_real_chunker
 async def test_chunk_with_chapters_falls_back_without_structure():
     chunker = ProseWindowChunker()
     drafts = await mod._chunk_with_chapters(chunker, _LONG, [], {"book_id": "onc5689"})
@@ -172,7 +155,6 @@ async def test_cached_ingest_explicit_title_overrides_store(env):
     assert result["title"] == "Caller Override"
 
 
-@needs_real_chunker
 async def test_cached_ingest_recovers_chapters_and_title_from_sidecar(env):
     """A prior scrape wrote text + chapter sidecar; re-ingesting from cache must
     rebuild chapter metadata and recover the title even when BorrowStore has no
