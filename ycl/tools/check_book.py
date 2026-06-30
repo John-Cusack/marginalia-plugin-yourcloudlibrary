@@ -64,6 +64,7 @@ async def handler(
                 live_status = {
                     "isbn": book.isbn,
                     "title": book.title,
+                    "author": book.author,
                     "status": book.status,
                     "can_read": book.can_read,
                     "page_count": book.page_count,
@@ -118,6 +119,7 @@ async def handler(
                 record.get("expires_at") is not None
                 and not store.is_active(library_key, book_id, now=now)
             ),
+            "returned": bool(record.get("returned")),
             "scraped": bool(record.get("scraped")),
             "scraped_at": record.get("scraped_at"),
             "char_count": record.get("char_count"),

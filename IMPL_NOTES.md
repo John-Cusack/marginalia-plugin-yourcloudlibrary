@@ -113,14 +113,81 @@ End-to-end smoke test (`scripts/probe_auth.py` cookies + new YclClient):
 The old browser-based design would have taken ~10 minutes for the same
 book. The API-only path is ~300x faster.
 
+## Active-loans endpoint (added 2026-06-29)
+
+Live findings that drove `ycl.sync_loans` and `YclClient.get_loans`. Probed
+by injecting the saved session cookies into a real browser and watching the
+My-Books page traffic (the loan list is fetched client-side after hydration,
+not server-rendered, so it doesn't appear in the initial HTML).
+
+**The loans list is a Remix _action_ (POST), not a `_data` loader GET.** This
+was the key surprise — the obvious guess (a GET loader mirroring `get_book`)
+does not work:
+
+- `GET …/library/{slug}/mybooks?_data=routes/library.$name.mybooks`
+  → **400** with header `x-remix-error: yes`. The `mybooks` route has **no
+  server loader** (the page's `__remixContext.loaderData` contains only
+  `root`), so requesting loader data for it errors.
+- The real call is on the `.current` child route:
+
+  ```
+  POST https://ebook.yourcloudlibrary.com/library/{slug}/mybooks/current
+       ?segment=1&pageSize=20&_data=routes/library.$name.mybooks.current
+  Content-Type: application/x-www-form-urlencoded
+  body: format=&sort=BorrowedDateDescending
+  ```
+
+  Response:
+
+  ```json
+  {
+    "patronItems": [
+      {"itemId": "onc5689", "loanId": "...", "title": "...",
+       "author": "...", "mediaType": "Epub", "dueDate": "<ISO 8601>",
+       "canRenew": true, "canReturn": true, "isSaved": false}
+    ],
+    "totalSegments": 1, "currentSegment": 1, "itemsPerSegment": 20,
+    "totalItems": 1, "RPC_DOMAIN_PUBLIC": "...", "reaktor": "..."
+  }
+  ```
+
+- `dueDate` is the **authoritative loan expiry** (the value the web UI counts
+  down from — `moment(dueDate).diff(now, "days")`). `sync_loans` writes it
+  straight into `expires_at` with `expires_at_is_estimated=False`.
+- Pagination is by `segment` (1-based) up to `totalSegments`; `get_loans`
+  walks every segment. Most patrons are well under one page.
+
+Replay it with `scripts/probe_loans.py`. **Assumption to revisit:** the exact
+field names above were confirmed against the `.current` route's client bundle
+and a live (empty) response on Palm Beach County Library System; a library on
+a different web-app build could rename fields. The parser tolerates a missing
+`author`/`loanId` and an epoch-format `dueDate`, and skips items without an
+`itemId`.
+
+## Author / subjects (added 2026-06-29)
+
+The detail-page loader (`get_book`) already returned far more than the
+plugin used. Confirmed live, it carries:
+
+- `contributors`: a list of `{"name": ...}`. A single entry can itself be a
+  `"Last, First; Last, First; …"` string. `_extract_author` joins the names
+  and trims a trailing `,`/`;`.
+- `contentCategories`: a dict keyed by opaque id, each value with a
+  human-readable `name` (e.g. `"Ecclesiology"`, `"Missions"`). Flattened to a
+  de-duplicated `subjects` list.
+- `description`: the jacket blurb (contains HTML).
+
+These now flow into the `Book` dataclass and the `ingest_book` metadata so the
+corpus is searchable by author/subject.
+
 ## What is *not* covered yet
 
 - **Audiobooks**. Detail page reports `mediaType: "Audiobook"` for those.
-  The manifest endpoint may or may not work for them; not tested.
+  The manifest endpoint may or may not work for them; not tested. `get_loans`
+  *will* list an audiobook loan (with its `mediaType`), but scraping it will
+  still fail at the manifest step.
 - **Comics+ / BiblioPlus**. Same library can have multiple sub-services.
   The plugin currently only handles the standard ebook path.
-- **Auto-discovery of active loans**. Could call a `/loans` endpoint to
-  populate BorrowStore automatically — not implemented.
 - **Re-borrow versioning**. Plugin treats re-borrows as new documents
   (Kindle convention); could change to per-borrow versioning.
 

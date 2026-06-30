@@ -31,6 +31,29 @@ class Book:
     publisher: str | None = None
     language: str | None = None
     media_type: str | None = None
+    author: str | None = None          # from the detail loader's ``contributors``
+    subjects: list[str] = field(default_factory=list)  # from ``contentCategories``
+    description: str | None = None      # marketing/jacket blurb (may contain HTML)
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Loan:
+    """One active loan from the My-Books ``mybooks.current`` action response.
+
+    ``due_date`` is the loan's real expiration as returned by YCL (the value
+    the UI counts down from), so it supersedes the estimated expiry the
+    plugin otherwise guesses.
+    """
+
+    item_id: str             # the book_id, e.g. "onc5689"
+    title: str
+    due_date: str            # raw ``dueDate`` from the API (ISO 8601 expected)
+    loan_id: str | None = None
+    media_type: str | None = None
+    author: str | None = None
+    can_renew: bool = False
+    can_return: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -86,6 +109,9 @@ class ScrapeResult:
     isbn: str
     title: str
     chapters: list[Chapter] = field(default_factory=list)
+    author: str | None = None
+    subjects: list[str] = field(default_factory=list)
+    description: str | None = None
 
     @property
     def text(self) -> str:

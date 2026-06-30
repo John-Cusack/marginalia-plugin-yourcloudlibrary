@@ -23,13 +23,14 @@ from .errors import (
     YclApiError,
 )
 from .scraper import scrape_book
-from .types import Book, Chapter, Manifest, ReadingOrderItem, ScrapeResult
+from .types import Book, Chapter, Loan, Manifest, ReadingOrderItem, ScrapeResult
 
 __all__ = [
     "AuthExpiredError",
     "Book",
     "BookNotBorrowedError",
     "Chapter",
+    "Loan",
     "Manifest",
     "NotAuthenticatedError",
     "ReadingOrderItem",

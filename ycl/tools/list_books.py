@@ -77,6 +77,7 @@ async def handler(
                 "expires_at_is_estimated": record.get("expires_at_is_estimated", False),
                 "days_remaining": days_remaining,
                 "expired": not is_active,
+                "returned": bool(record.get("returned")),
                 "scraped": bool(record.get("scraped")),
                 "ingested": bool(record.get("ingested")),
                 "document_id": record.get("document_id"),

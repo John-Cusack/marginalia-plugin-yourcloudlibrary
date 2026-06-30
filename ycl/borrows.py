@@ -26,12 +26,14 @@ import fcntl
 import json
 import os
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ._paths import BORROWS_PATH
-from ._time import from_iso, utcnow
+from ._time import days_until, from_iso, utcnow
 
 _StateT = dict[str, dict[str, dict[str, Any]]]
 
@@ -67,6 +69,9 @@ class BorrowStore:
         record = self.get(library_id, book_id)
         if record is None:
             return False
+        # A returned loan is inactive regardless of its (now stale) expires_at.
+        if record.get("returned"):
+            return False
         expires_at = record.get("expires_at")
         if not expires_at:
             return False
@@ -82,10 +87,7 @@ class BorrowStore:
         record = self.get(library_id, book_id)
         if record is None or not record.get("expires_at"):
             return None
-        delta = from_iso(record["expires_at"]) - (now or utcnow())
-        # Round toward zero so a loan with 1.4 days left reports "1 day" rather
-        # than "2"; expired loans report negative numbers.
-        return int(delta.total_seconds() // 86400)
+        return days_until(record["expires_at"], now or utcnow())
 
     # --- write paths -------------------------------------------------------
 
@@ -146,6 +148,25 @@ class BorrowStore:
                 state.pop(library_id, None)
             self._write(state)
             return True
+
+    @contextmanager
+    def mutate(self) -> Iterator[_StateT]:
+        """Open one exclusive-locked transaction over the whole store.
+
+        Yields the mutable state dict (``{library_id: {book_id: record}}``) and
+        writes it back exactly once, atomically, on clean exit. Nothing is
+        written if the body raises. Use this when a single logical operation
+        touches many records (e.g. ``ycl.sync_loans`` upserting every active
+        loan and reconciling returns) so the cost is one read + one write
+        instead of one per record.
+        """
+        ctx = self._exclusive_lock()
+        state = ctx.__enter__()
+        try:
+            yield state
+            self._write(state)
+        finally:
+            ctx.__exit__(None, None, None)
 
     # --- locking + IO ------------------------------------------------------
 

@@ -22,6 +22,7 @@ from ..api import (
     scrape_book as api_scrape_book,
 )
 from ..borrows import BorrowStore
+from ._common import effective_expires_at
 
 log = structlog.get_logger(__name__)
 
@@ -132,6 +133,7 @@ async def handler(
     library_key = client.library.url_name or "unknown"
     store = BorrowStore()
     now = utcnow()
+    existing_record = store.get(library_key, book_id) or {}
     text_path = text_path_for(library_key, book_id)
     source = str(text_path.resolve())
 
@@ -160,6 +162,9 @@ async def handler(
     isbn: str | None = None
     chapter_count: int | None = None
     scraped_chapters: list = []
+    author: str | None = None
+    subjects: list[str] = []
+    description: str | None = None
     if rescrape or not text_path.exists():
         try:
             async with client:
@@ -191,29 +196,40 @@ async def handler(
         isbn = result.isbn
         chapter_count = result.chapter_count
         scraped_chapters = result.chapters
+        author = result.author
+        subjects = result.subjects
+        description = result.description
         write_text_cache(library_key, book_id, result)
     else:
         await client.close()
         text = text_path.read_text(encoding="utf-8")
-        record = store.get(library_key, book_id) or {}
-        isbn = record.get("isbn")
+        isbn = existing_record.get("isbn")
         # Rebuild chapter structure (and recover the title) from the cache
         # sidecar so a re-ingest off disk keeps the same per-chapter passage
         # metadata a fresh scrape would produce. Empty for pre-sidecar caches.
         cached_title, scraped_chapters = read_chapter_sidecar(
             library_key, book_id, text
         )
-        chapter_count = record.get("chapter_count") or (len(scraped_chapters) or None)
+        chapter_count = existing_record.get("chapter_count") or (
+            len(scraped_chapters) or None
+        )
         # Prefer the title recorded at scrape time, then the sidecar's title,
         # then a generic placeholder. Never sniff cover/chapter junk from the
         # text body (P2.4).
-        scraped_title = record.get("title") or cached_title or f"YCL Book {book_id}"
+        scraped_title = (
+            existing_record.get("title") or cached_title or f"YCL Book {book_id}"
+        )
+        author = existing_record.get("author")
+        subjects = existing_record.get("subjects") or []
+        description = existing_record.get("description")
 
     if not text.strip():
         return _err("empty_text", "No text available.", book_id=book_id)
 
+    # Prefer an authoritative stored expiry (e.g. from ycl.sync_loans) over a
+    # fresh estimate when the caller didn't pass an explicit expires_at.
     resolved_expires_at, estimated = resolve_expires_at(
-        explicit_expires_at=expires_at,
+        explicit_expires_at=effective_expires_at(expires_at, existing_record),
         explicit_borrowed_at=borrowed_at,
         borrow_days=cfg.fallback_borrow_days,
         now=now,
@@ -226,6 +242,9 @@ async def handler(
         "library_name": client.library.name,
         "book_id": book_id,
         "ycl_title": final_title,
+        "author": author,
+        "subjects": subjects,
+        "description": description,
         "isbn": isbn,
         "borrowed_at": resolved_borrowed_at,
         "expires_at": resolved_expires_at,
@@ -251,6 +270,9 @@ async def handler(
         library_id=library_key,
         book_id=book_id,
         title=final_title,
+        author=author,
+        subjects=subjects,
+        description=description,
         isbn=isbn,
         borrowed_at=resolved_borrowed_at,
         expires_at=resolved_expires_at,
@@ -267,6 +289,7 @@ async def handler(
         "book_id": book_id,
         "library_id": library_key,
         "title": final_title,
+        "author": author,
         "isbn": isbn,
         "document_id": result["document_id"],
         "passage_count": result["passage_count"],

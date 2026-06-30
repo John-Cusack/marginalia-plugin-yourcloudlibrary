@@ -97,6 +97,9 @@ async def scrape_known_book(
         isbn=book.isbn,
         title=book.title or manifest.title,
         chapters=structured,
+        author=book.author,
+        subjects=book.subjects,
+        description=book.description,
     )
 
 

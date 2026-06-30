@@ -42,6 +42,9 @@ provides:
     - id: ycl.check_book
       entry: ycl.tools.check_book:handler
       description: "Check borrow status, expiration, scrape state, and ingestion state for a book."
+    - id: ycl.sync_loans
+      entry: ycl.tools.sync_loans:handler
+      description: "Sync currently-active loans into the borrow store with their real expiration dates. Answers 'what do I have out right now?'."
     - id: ycl.list_books
       entry: ycl.tools.list_books:handler
       description: "List known borrows for the current library (active by default)."

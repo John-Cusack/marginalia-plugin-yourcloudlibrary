@@ -28,6 +28,18 @@ def from_iso(text: str) -> datetime:
     return dt.astimezone(UTC)
 
 
+def days_until(expires_at_iso: str, now: datetime) -> int:
+    """Whole days from ``now`` until ``expires_at_iso`` (UTC ISO 8601).
+
+    Rounds toward zero so a loan with 1.4 days left reports ``1`` rather than
+    ``2``; an expired loan reports a negative number. Shared by
+    :meth:`ycl.borrows.BorrowStore.days_remaining` and the loan-sync tool so
+    the arithmetic lives in exactly one place.
+    """
+    delta = from_iso(expires_at_iso) - now
+    return int(delta.total_seconds() // 86400)
+
+
 def resolve_expires_at(
     *,
     explicit_expires_at: str | None,
