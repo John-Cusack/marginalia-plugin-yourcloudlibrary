@@ -90,7 +90,8 @@ def env(tmp_path, monkeypatch):
     sidecar in one shot.
     """
     monkeypatch.setattr(paths, "EXTRACTED_DIR", tmp_path / "extracted")
-    monkeypatch.setattr(mod, "YclClient", _FakeClient)
+    # The handler acquires its client via the shared acquire_client() helper.
+    monkeypatch.setattr(mod, "acquire_client", lambda: (_FakeClient(), None))
     store = BorrowStore(path=tmp_path / "borrows.json")
     monkeypatch.setattr(mod, "BorrowStore", lambda: store)
 

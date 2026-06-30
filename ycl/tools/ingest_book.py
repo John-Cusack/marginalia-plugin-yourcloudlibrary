@@ -14,23 +14,19 @@ from .._time import resolve_expires_at, to_iso, utcnow
 from ..api import (
     AuthExpiredError,
     BookNotBorrowedError,
-    NotAuthenticatedError,
     YclApiError,
-    YclClient,
 )
 from ..api import (
     scrape_book as api_scrape_book,
 )
 from ..borrows import BorrowStore
 from ._common import effective_expires_at
+from ._errors import RELOGIN_HINT, acquire_client
+from ._errors import err as _err
 
 log = structlog.get_logger(__name__)
 
 READER_URL_TEMPLATE = "https://epub.yourcloudlibrary.com/read/{book_id}"
-
-
-def _err(error_type: str, message: str, **extra) -> dict:
-    return {"status": "error", "error_type": error_type, "message": message, **extra}
 
 
 async def _chunk_with_chapters(chunker, text: str, chapters: list, metadata: dict):
@@ -121,14 +117,9 @@ async def handler(
     except ConfigError as exc:
         return _err("config", str(exc))
 
-    try:
-        client = YclClient.from_cookie_store()
-    except NotAuthenticatedError as exc:
-        return _err(
-            "not_authenticated",
-            str(exc),
-            hint="Run `uv run python -m ycl.cli.login` once.",
-        )
+    client, error = acquire_client()
+    if error:
+        return error
 
     library_key = client.library.url_name or "unknown"
     store = BorrowStore()
@@ -165,6 +156,8 @@ async def handler(
     author: str | None = None
     subjects: list[str] = []
     description: str | None = None
+    scrape_partial = False
+    failed_chapters = 0
     if rescrape or not text_path.exists():
         try:
             async with client:
@@ -172,9 +165,7 @@ async def handler(
                     client, book_id, concurrency=concurrency
                 )
         except AuthExpiredError as exc:
-            return _err(
-                "auth_expired", str(exc), hint="Re-run `python -m ycl.cli.login`."
-            )
+            return _err("auth_expired", str(exc), hint=RELOGIN_HINT)
         except BookNotBorrowedError as exc:
             store.upsert(
                 library_id=library_key,
@@ -199,6 +190,8 @@ async def handler(
         author = result.author
         subjects = result.subjects
         description = result.description
+        scrape_partial = result.partial
+        failed_chapters = result.failed_chapters
         write_text_cache(library_key, book_id, result)
     else:
         await client.close()
@@ -222,6 +215,10 @@ async def handler(
         author = existing_record.get("author")
         subjects = existing_record.get("subjects") or []
         description = existing_record.get("description")
+        # Preserve the partial flag recorded when the cache was written, so a
+        # re-ingest of a truncated scrape doesn't masquerade as complete.
+        scrape_partial = bool(existing_record.get("partial", False))
+        failed_chapters = int(existing_record.get("failed_chapters") or 0)
 
     if not text.strip():
         return _err("empty_text", "No text available.", book_id=book_id)
@@ -252,6 +249,7 @@ async def handler(
         "scraped_at": to_iso(now),
         "char_count": len(text),
         "chapter_count": chapter_count,
+        "partial_scrape": scrape_partial,
         "source_url": READER_URL_TEMPLATE.format(book_id=book_id),
     }
 
@@ -281,11 +279,15 @@ async def handler(
         scraped_at=to_iso(now),
         char_count=len(text),
         chapter_count=chapter_count,
+        partial=scrape_partial,
+        failed_chapters=failed_chapters,
     )
     store.mark_ingested(library_key, book_id, document_id=result["document_id"])
 
     return {
-        "status": "ingested",
+        # Distinct status so callers branching on it don't treat a
+        # chapter-truncated book as a fully complete ingest.
+        "status": "ingested_partial" if scrape_partial else "ingested",
         "book_id": book_id,
         "library_id": library_key,
         "title": final_title,
@@ -293,6 +295,8 @@ async def handler(
         "isbn": isbn,
         "document_id": result["document_id"],
         "passage_count": result["passage_count"],
+        "partial_scrape": scrape_partial,
+        "failed_chapters": failed_chapters,
         "source": source,
         "expires_at": resolved_expires_at,
         "expires_at_is_estimated": estimated,

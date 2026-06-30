@@ -13,21 +13,17 @@ from .._time import resolve_expires_at, to_iso, utcnow
 from ..api import (
     AuthExpiredError,
     BookNotBorrowedError,
-    NotAuthenticatedError,
     YclApiError,
-    YclClient,
 )
 from ..api import (
     scrape_book as api_scrape_book,
 )
 from ..borrows import BorrowStore
 from ._common import effective_expires_at
+from ._errors import RELOGIN_HINT, acquire_client
+from ._errors import err as _err
 
 log = structlog.get_logger(__name__)
-
-
-def _err(error_type: str, message: str, **extra) -> dict:
-    return {"status": "error", "error_type": error_type, "message": message, **extra}
 
 
 @tool(
@@ -88,14 +84,9 @@ async def handler(
     except ConfigError as exc:
         return _err("config", str(exc))
 
-    try:
-        client = YclClient.from_cookie_store()
-    except NotAuthenticatedError as exc:
-        return _err(
-            "not_authenticated",
-            str(exc),
-            hint="Run `uv run python -m ycl.cli.login` once.",
-        )
+    client, error = acquire_client()
+    if error:
+        return error
 
     library_key = client.library.url_name or "unknown"
     store = BorrowStore()
@@ -105,11 +96,7 @@ async def handler(
         async with client:
             result = await api_scrape_book(client, book_id, concurrency=concurrency)
     except AuthExpiredError as exc:
-        return _err(
-            "auth_expired",
-            str(exc),
-            hint="Re-run `uv run python -m ycl.cli.login`.",
-        )
+        return _err("auth_expired", str(exc), hint=RELOGIN_HINT)
     except BookNotBorrowedError as exc:
         store.upsert(
             library_id=library_key,
@@ -164,16 +151,20 @@ async def handler(
         scraped_at=to_iso(now),
         char_count=result.total_chars,
         chapter_count=result.chapter_count,
+        partial=result.partial,
+        failed_chapters=result.failed_chapters,
     )
 
     return {
-        "status": "success",
+        "status": "partial" if result.partial else "success",
         "book_id": book_id,
         "library_id": library_key,
         "library_name": client.library.name,
         "title": record["title"],
         "isbn": result.isbn,
         "chapter_count": result.chapter_count,
+        "partial": result.partial,
+        "failed_chapters": result.failed_chapters,
         "text_length": result.total_chars,
         "text_preview": result.text[:500],
         "output_path": str(text_path),

@@ -159,6 +159,7 @@ venv.bak/
 
 # Plugin-local probe captures (contain session cookies / book content)
 scratch/
+.playwright-mcp/
 
 # Playwright MCP scratch output (snapshots / console logs from live probes)
 .playwright-mcp/

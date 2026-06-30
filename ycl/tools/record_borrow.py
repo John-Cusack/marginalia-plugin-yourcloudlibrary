@@ -6,16 +6,10 @@ from research_engine.plugins.sdk import tool
 
 from .._config import ConfigError
 from .._config import load as load_config
-from .._paths import COOKIE_PATH
 from .._time import resolve_expires_at, to_iso, utcnow
-from ..api.cookies import decode_config_cookie
-from ..api.errors import NotAuthenticatedError
 from ..borrows import BorrowStore
-from ..session.cookies import CookieStore
-
-
-def _err(error_type: str, message: str, **extra) -> dict:
-    return {"status": "error", "error_type": error_type, "message": message, **extra}
+from ._errors import err as _err
+from ._errors import load_library
 
 
 @tool(
@@ -63,16 +57,9 @@ async def handler(
     except ConfigError as exc:
         return _err("config", str(exc))
 
-    cookies = CookieStore(COOKIE_PATH).load()
-    if not cookies:
-        return _err(
-            "not_authenticated",
-            "No cookies on disk. Run `uv run python -m ycl.cli.login` once.",
-        )
-    try:
-        info = decode_config_cookie(cookies)
-    except NotAuthenticatedError as exc:
-        return _err("not_authenticated", str(exc))
+    info, error = load_library(required=True)
+    if error:
+        return error
 
     library_key = info.url_name or "unknown"
     store = BorrowStore()

@@ -180,6 +180,29 @@ plugin used. Confirmed live, it carries:
 These now flow into the `Book` dataclass and the `ingest_book` metadata so the
 corpus is searchable by author/subject.
 
+## Catalog search — same Remix-loader trick (probed 2026-06-29)
+
+Confirmed live with `scripts/probe_search.py` / `probe_search_live.py`:
+
+| URL | What |
+| --- | --- |
+| `…/library/{SLUG}/search?query={q}&_data=routes/library.$name.search` | Search loader. **200 `application/json`**, top-level keys `results`, `categories`, `segment`, `action`, `advanced`. |
+
+- The hit list is nested under `results.search`. Other live params the UI
+  sends (all optional, empty = "no filter"): `format`, `available` (`any` /
+  `available`), `language`, `sort`, `orderBy` (spelled `relevence` upstream),
+  `owned=yes`. There is **no** separate backend call — the loader *is* the
+  search endpoint (capturing all cross-host requests showed only the document
+  + this one fetch; `categories` come back fully populated in the same body).
+- **Caveat:** the only session available for probing was ~7 weeks old and every
+  query returned zero hits (the rendered page agreed: "No titles match"), so the
+  *populated* result-item shape could not be captured. `ycl.api.client._parse_search_results`
+  is therefore written defensively against cloudLibrary's documented book-document
+  convention — `itemId` / `title` / `contributors[].name` / `canBorrow` (the same
+  fields the detail loader returns, see `get_book`) — and falls back to the first
+  list-of-dicts under `results.search` if the container key differs. If the live
+  shape turns out different, the fix is localized to that one function.
+
 ## What is *not* covered yet
 
 - **Audiobooks**. Detail page reports `mediaType: "Audiobook"` for those.

@@ -97,6 +97,16 @@ class Chapter:
 
 
 @dataclass(frozen=True)
+class SearchHit:
+    """One catalog-search result row."""
+
+    book_id: str            # opaque vendor id, e.g. "onc5689" — feeds scrape/ingest
+    title: str
+    author: str | None = None
+    available: bool | None = None   # True=borrowable now, False=hold-only, None=unknown
+
+
+@dataclass(frozen=True)
 class ScrapeResult:
     """Output of ``scrape_book``.
 
@@ -112,6 +122,8 @@ class ScrapeResult:
     author: str | None = None
     subjects: list[str] = field(default_factory=list)
     description: str | None = None
+    partial: bool = False           # True when some chapters were unrecoverable
+    failed_chapters: int = 0        # count of chapters dropped from the text
 
     @property
     def text(self) -> str:
