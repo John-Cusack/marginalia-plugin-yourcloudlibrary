@@ -66,6 +66,7 @@ patron id) is read from the `__config_PROD` cookie at runtime.
 ## MCP tools
 
 - `ycl.auth_status` — report whether session cookies are present and which library.
+- `ycl.search_catalog` — search the catalog by title/author/keyword; returns `book_id`s to feed the other tools.
 - `ycl.scrape_book` — fetch a borrowed book's full text and save to disk.
 - `ycl.ingest_book` — fetch (if needed) and ingest into the corpus as `ycl_book`.
 - `ycl.check_book` — borrow + disk + corpus state for one book; calls the live API by default.

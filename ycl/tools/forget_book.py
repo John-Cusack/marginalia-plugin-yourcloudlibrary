@@ -8,11 +8,8 @@ from __future__ import annotations
 
 from research_engine.plugins.sdk import tool
 
-from .._paths import COOKIE_PATH
-from ..api.cookies import decode_config_cookie
-from ..api.errors import NotAuthenticatedError
 from ..borrows import BorrowStore
-from ..session.cookies import CookieStore
+from ._errors import load_library
 
 
 @tool(
@@ -37,14 +34,8 @@ async def handler(
     book_id: str,
     **_clients,
 ) -> dict:
-    cookies = CookieStore(COOKIE_PATH).load()
-    library_key = "unknown"
-    if cookies:
-        try:
-            info = decode_config_cookie(cookies)
-            library_key = info.url_name or library_key
-        except NotAuthenticatedError:
-            pass
+    info, _ = load_library()
+    library_key = (info.url_name or "unknown") if info else "unknown"
 
     store = BorrowStore()
     removed = store.forget(library_key, book_id)

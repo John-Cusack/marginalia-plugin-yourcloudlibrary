@@ -23,7 +23,15 @@ from .errors import (
     YclApiError,
 )
 from .scraper import scrape_book
-from .types import Book, Chapter, Loan, Manifest, ReadingOrderItem, ScrapeResult
+from .types import (
+    Book,
+    Chapter,
+    Loan,
+    Manifest,
+    ReadingOrderItem,
+    ScrapeResult,
+    SearchHit,
+)
 
 __all__ = [
     "AuthExpiredError",
@@ -35,6 +43,7 @@ __all__ = [
     "NotAuthenticatedError",
     "ReadingOrderItem",
     "ScrapeResult",
+    "SearchHit",
     "YclApiError",
     "YclClient",
     "scrape_book",

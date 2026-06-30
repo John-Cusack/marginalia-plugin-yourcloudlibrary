@@ -33,6 +33,9 @@ provides:
     - id: ycl.auth_status
       entry: ycl.tools.auth_status:handler
       description: "Report whether the plugin has YCL session cookies; tells the user how to log in if not."
+    - id: ycl.search_catalog
+      entry: ycl.tools.search_catalog:handler
+      description: "Search the library catalog by title/author/keyword; returns book_ids to feed scrape/ingest."
     - id: ycl.scrape_book
       entry: ycl.tools.scrape_book:handler
       description: "Scrape a borrowed book from YourCloudLibrary via the YCL API and save plain text to disk."

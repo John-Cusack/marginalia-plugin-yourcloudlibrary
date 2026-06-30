@@ -65,9 +65,9 @@ def _make_transport(handler):
     return httpx.MockTransport(handler)
 
 
-def _client_with_handler(handler):
+def _client_with_handler(handler, **client_kwargs):
     transport = _make_transport(handler)
-    client = YclClient(cookie_jar=JAR, library_info=LIBRARY)
+    client = YclClient(cookie_jar=JAR, library_info=LIBRARY, **client_kwargs)
     # Replace the underlying transport with the mock.
     client._client = httpx.AsyncClient(
         transport=transport,
@@ -76,6 +76,9 @@ def _client_with_handler(handler):
         timeout=10.0,
         headers={"Origin": "https://epub.yourcloudlibrary.com"},
     )
+    # Keep retry backoff instant in tests — real timing is exercised explicitly
+    # in test_api_retries.py via the patched _sleep seam.
+    client._backoff_base = 0.0
     return client
 
 

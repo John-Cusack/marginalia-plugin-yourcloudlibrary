@@ -58,9 +58,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "EXTRACTED_DIR", tmp_path / "extracted")
     store = BorrowStore(tmp_path / "borrows.json")
     monkeypatch.setattr(mod, "BorrowStore", lambda: store)
-    monkeypatch.setattr(
-        mod.YclClient, "from_cookie_store", staticmethod(lambda *a, **k: _FakeClient())
-    )
+    # The handler acquires its client via the shared acquire_client() helper.
+    monkeypatch.setattr(mod, "acquire_client", lambda: (_FakeClient(), None))
 
     async def _fake_scrape(client, book_id, concurrency=4):
         return _scrape_result(book_id)
