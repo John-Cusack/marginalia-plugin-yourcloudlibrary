@@ -157,6 +157,12 @@ ENV/
 env.bak/
 venv.bak/
 
+# Plugin-local probe captures (contain session cookies / book content)
+scratch/
+
+# Playwright MCP scratch output (snapshots / console logs from live probes)
+.playwright-mcp/
+
 # Spyder project settings
 .spyderproject
 .spyproject
