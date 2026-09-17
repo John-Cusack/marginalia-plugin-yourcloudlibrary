@@ -91,6 +91,13 @@ Restart `research-engine serve` afterwards. After an upgrade that changes the
 version or manifest, core marks the plugin pending until you run
 `research-engine plugin approve-upgrade yourcloudlibrary`.
 
+If `research-engine plugin list` stops with "Local embedding support is not
+installed" or "Local reranking support is not installed", that is core building
+its inference stack, which a base install has no models for — it is not about this
+plugin. Either install `research-engine[local-inference]`, or point core at a
+remote inference server (`RE_EMBEDDING_PROVIDER=remote_api`,
+`RE_INFERENCE_BASE_URL=…`, and `RE_RERANKER_PROVIDER=remote_api` or `none`).
+
 ### What you are approving
 
 | Permission | Why |
@@ -108,9 +115,9 @@ releases you trust.
 
 The plugin contributes:
 
-| Tool (MCP name) | What it does |
+| Tool | What it does |
 |---|---|
-| `yourcloudlibrary.search_catalog` (`yourcloudlibrary_search_catalog`) | Relevance search over the whole catalog with live availability. Returns each book's `book_id` (catalog `documentId`). Read-only. |
+| `yourcloudlibrary.search_catalog` | Relevance search over the whole catalog with live availability. Returns each book's `book_id` (catalog `documentId`). Read-only. |
 | `yourcloudlibrary.acquire_and_ingest` | Borrow a book, scrape and ingest it, then return the loan (default) so the slot is free again. Never returns a loan you already had; a failed return is reported and never undoes the ingest. |
 | `yourcloudlibrary.ingest_book` | Ingest a book you have on loan (scrapes, or reuses the on-disk copy). Idempotent. |
 | `yourcloudlibrary.scrape_book` | Save a borrowed book's text to disk without ingesting. |
@@ -141,8 +148,8 @@ Typical flows:
 1. Remove the old package or pack (`marginalia-plugin-yourcloudlibrary`) and install
    this one as above.
 2. **Tool ids are namespaced by plugin id:** `ycl.<name>` is now
-   `yourcloudlibrary.<name>` (MCP names `yourcloudlibrary_<name>`). Update saved
-   prompts or scripts that call tools by name.
+   `yourcloudlibrary.<name>`. Update saved prompts or scripts that call tools by
+   name. (Core also accepts the underscored spelling, `yourcloudlibrary_<name>`.)
 3. Move your data from `~/.marginalia/plugins/yourcloudlibrary`:
 
    ```bash

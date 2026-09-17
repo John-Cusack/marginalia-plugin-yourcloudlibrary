@@ -20,10 +20,10 @@ cutover; see "Upgrading from 0.2.x" in the README.
   (schema v2, `plugin_id: yourcloudlibrary`, `core_api >=0.6,<0.7`) and ships in the
   wheel. Identity, version, and dependencies live only in `pyproject.toml`. Every
   tool's full input schema is in the manifest.
-- **Tool ids renamed** from `ycl.*` to `yourcloudlibrary.*` (MCP names
-  `yourcloudlibrary_*`), as manifest v2 requires tool ids to be namespaced by
-  `plugin_id`. Source-search `ingest_action`s name
-  `yourcloudlibrary.acquire_and_ingest`.
+- **Tool ids renamed** from `ycl.*` to `yourcloudlibrary.*`, as manifest v2
+  requires tool ids to be namespaced by `plugin_id`. Core publishes them over MCP
+  under those ids (and also accepts the `yourcloudlibrary_*` spelling).
+  Source-search `ingest_action`s name `yourcloudlibrary.acquire_and_ingest`.
 - **SDK cutover.** Every import of `research_engine.plugins.sdk` and
   `research_engine.domain.source_search` now comes from `research_engine_sdk`. No
   runtime module imports core, and the package depends on the SDK, not on core.
