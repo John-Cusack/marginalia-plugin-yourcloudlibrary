@@ -4,14 +4,19 @@ All notable changes to this plugin. Versions follow PEP 440.
 
 ## 0.3.0 — unreleased
 
-Requires `research-engine` 0.6.x and `research-engine-sdk` 0.6.x. This is a clean
+Requires `marginalia-ai` 0.6.x and `marginalia-ai-sdk` 0.6.x. This is a clean
 cutover; see "Upgrading from 0.2.x" in the README.
 
 ### Changed
 
 - **Package renamed** from `marginalia-plugin-yourcloudlibrary` to
-  `research-engine-plugin-yourcloudlibrary`, with complete PyPI metadata (README,
-  Apache-2.0 license expression and file, classifiers, keywords, project URLs).
+  `marginalia-ai-plugin-yourcloudlibrary`, joining the MarginaliaAI distribution
+  family (`marginalia-ai`, `marginalia-ai-sdk`, `marginalia-ai-plugin-*`), with
+  complete PyPI metadata (README, Apache-2.0 license expression and file,
+  classifiers, keywords, project URLs). Nothing was published under either older
+  name, so there is no alias to fall back on. The `ycl` import package, the
+  `yourcloudlibrary` plugin id, the `research_engine.plugins` entry-point group and
+  the `research-engine-ycl-login` command are unchanged.
 - **Entry-point activation.** The wheel advertises
   `research_engine.plugins: yourcloudlibrary = ycl`. Core discovers it and reads the
   manifest without importing the plugin; nothing loads until
@@ -25,8 +30,9 @@ cutover; see "Upgrading from 0.2.x" in the README.
   under those ids (and also accepts the `yourcloudlibrary_*` spelling).
   Source-search `ingest_action`s name `yourcloudlibrary.acquire_and_ingest`.
 - **SDK cutover.** Every import of `research_engine.plugins.sdk` and
-  `research_engine.domain.source_search` now comes from `research_engine_sdk`. No
-  runtime module imports core, and the package depends on the SDK, not on core.
+  `research_engine.domain.source_search` now comes from `research_engine_sdk` (the
+  import package `marginalia-ai-sdk` ships). No runtime module imports core, and
+  the package depends on the SDK, not on the core application.
 - **Core does the chunking.** Ingestion calls `IngestionClient.ingest_document()`
   with the canonical text; core applies `ycl_book`'s `prose_window` chunker from the
   manifest. Chapters are sent as sections and become document nodes, replacing the

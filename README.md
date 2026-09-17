@@ -1,4 +1,4 @@
-# research-engine-plugin-yourcloudlibrary
+# marginalia-ai-plugin-yourcloudlibrary
 
 A [Research Engine](https://github.com/John-Cusack/MarginaliaAI) plugin for
 YourCloudLibrary (Bibliotheca cloudLibrary). It searches your library's catalog,
@@ -15,8 +15,8 @@ loan in one step.
 
 | | |
 |---|---|
-| Research Engine | `research-engine` 0.6.x (`core_api >=0.6,<0.7`) |
-| SDK | `research-engine-sdk` 0.6.x (installed automatically) |
+| Research Engine | `marginalia-ai` 0.6.x (`core_api >=0.6,<0.7`) |
+| SDK | `marginalia-ai-sdk` 0.6.x (installed automatically) |
 | Python | 3.11+ |
 | OS | Linux or macOS (the borrow registry uses POSIX file locks) |
 | Account | A library card at a library that uses YourCloudLibrary |
@@ -26,9 +26,9 @@ loan in one step.
 Install into the same environment as Research Engine:
 
 ```bash
-python -m pip install research-engine-plugin-yourcloudlibrary
+python -m pip install marginalia-ai-plugin-yourcloudlibrary
 # or, if Research Engine was installed with pipx:
-pipx inject research-engine research-engine-plugin-yourcloudlibrary
+pipx inject marginalia-ai marginalia-ai-plugin-yourcloudlibrary
 ```
 
 Then install the browser Playwright drives. Installing the wheel never downloads it:
@@ -36,7 +36,7 @@ Then install the browser Playwright drives. Installing the wheel never downloads
 ```bash
 python -m playwright install chromium
 # pipx: use the interpreter inside Research Engine's pipx environment
-"$(pipx environment --value PIPX_LOCAL_VENVS)/research-engine/bin/python" -m playwright install chromium
+"$(pipx environment --value PIPX_LOCAL_VENVS)/marginalia-ai/bin/python" -m playwright install chromium
 ```
 
 Use the same environment's Python: each Playwright release expects its own
@@ -94,7 +94,7 @@ version or manifest, core marks the plugin pending until you run
 If `research-engine plugin list` stops with "Local embedding support is not
 installed" or "Local reranking support is not installed", that is core building
 its inference stack, which a base install has no models for — it is not about this
-plugin. Either install `research-engine[local-inference]`, or point core at a
+plugin. Either install `marginalia-ai[local-inference]`, or point core at a
 remote inference server (`RE_EMBEDDING_PROVIDER=remote_api`,
 `RE_INFERENCE_BASE_URL=…`, and `RE_RERANKER_PROVIDER=remote_api` or `none`).
 
@@ -185,7 +185,7 @@ extracted/<library>/<book_id>.chapters.json  # chapter structure for re-ingest
 
 ```bash
 research-engine plugin disable yourcloudlibrary
-python -m pip uninstall research-engine-plugin-yourcloudlibrary
+python -m pip uninstall marginalia-ai-plugin-yourcloudlibrary
 ```
 
 Neither step deletes anything you created: ingested documents stay in your
@@ -211,18 +211,18 @@ the `ycl_book` documents in Research Engine.
 uv sync --extra dev
 uv run ruff check ycl tests
 uv run pytest                       # unit + contract (no network, no core)
-uv run pytest -m integration        # needs research-engine==0.6.0 and RE_DB_URL
+uv run pytest -m integration        # needs marginalia-ai==0.6.0 and RE_DB_URL
 uv run pytest -m live               # real site, your saved session
 ```
 
-- **Unit** tests use only the SDK and the plugin. Until `research-engine-sdk` 0.6 is
+- **Unit** tests use only the SDK and the plugin. Until `marginalia-ai-sdk` 0.6 is
   on PyPI they run against a test-only stand-in in `tests/_sdk_standin`; the pytest
   header says which SDK is in use, and `YCL_TEST_REQUIRE_REAL_SDK=1` makes the
   stand-in an error.
 - **Contract** tests check `ycl/plugin.yaml` against the SDK model and the code,
   that no runtime module imports core, and build the wheel and sdist to inspect
   what would be published.
-- **Integration** tests run only where `research-engine==0.6.0` is installed. They create a scratch database named `research_engine_ycl_plugin_test`
+- **Integration** tests run only where `marginalia-ai==0.6.0` is installed. They create a scratch database named `research_engine_ycl_plugin_test`
   on the server in `RE_DB_URL`, ingest a generated fixture book, and delete exactly
   what they created. The CLI lifecycle test also needs this plugin installed as a
   wheel and `research-engine` on `PATH`.

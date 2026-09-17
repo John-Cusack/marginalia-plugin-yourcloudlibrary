@@ -1,7 +1,7 @@
 """Discovery → audit → enable → load → upgrade → disable, through core's own CLI.
 
 Runs only where the plugin is installed as a distribution next to
-``research-engine>=0.6`` (the release smoke venv or CI) and ``RE_DB_URL`` points at
+``marginalia-ai>=0.6`` (the release smoke venv or CI) and ``RE_DB_URL`` points at
 a server for the disposable test database. Everything goes through the
 ``research-engine`` executable, so it exercises the contract operators use.
 
@@ -108,7 +108,7 @@ def cli(tmp_path_factory):
 
 
 def _installed_manifest() -> Path:
-    dist = importlib.metadata.distribution("research-engine-plugin-yourcloudlibrary")
+    dist = importlib.metadata.distribution("marginalia-ai-plugin-yourcloudlibrary")
     return Path(dist.locate_file("ycl/plugin.yaml"))
 
 

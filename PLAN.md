@@ -1,7 +1,7 @@
 # Plan: `marginalia-plugin-yourcloudlibrary`
 
 > **Historical (0.1.x).** Paths, commands, `pack.yaml`, and tool ids below predate
-> the 0.3.0 package (`research-engine-plugin-yourcloudlibrary`). The README and
+> the 0.3.0 package (`marginalia-ai-plugin-yourcloudlibrary`). The README and
 > CHANGELOG describe the current plugin.
 
 > **Audience:** another software-architecture reviewer. This document is the

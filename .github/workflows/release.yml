@@ -1,6 +1,21 @@
 name: Release
 
 # Protect `v*` tags in the repository settings so only maintainers can trigger this.
+#
+# Publishing uses PyPI Trusted Publishing — no API token exists for this project.
+# Register a *pending* publisher before the first upload
+# (https://pypi.org/manage/account/publishing/):
+#
+#   Project name:  marginalia-ai-plugin-yourcloudlibrary
+#   Owner:         John-Cusack
+#   Repository:    marginalia-plugin-yourcloudlibrary
+#   Workflow:      release.yml
+#   Environment:   pypi
+#
+# The same values apply on TestPyPI (https://test.pypi.org/manage/account/publishing/)
+# with environment `testpypi`, once a TestPyPI upload job exists; this workflow
+# publishes to production PyPI only. Create both GitHub environments under
+# Settings → Environments and add required reviewers before the first tag.
 on:
   push:
     tags: ["v*"]
@@ -40,7 +55,7 @@ jobs:
         run: |
           python3 -m venv /tmp/ycl-release-smoke
           /tmp/ycl-release-smoke/bin/python -m pip install --upgrade pip
-          /tmp/ycl-release-smoke/bin/python -m pip install "research-engine==0.6.0" dist/*.whl
+          /tmp/ycl-release-smoke/bin/python -m pip install "marginalia-ai==0.6.0" dist/*.whl
           cd /tmp
           /tmp/ycl-release-smoke/bin/research-engine plugin list | tee plugin-list.txt
           grep -q yourcloudlibrary plugin-list.txt
@@ -58,7 +73,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/project/research-engine-plugin-yourcloudlibrary/
+      url: https://pypi.org/project/marginalia-ai-plugin-yourcloudlibrary/
     permissions:
       id-token: write   # Trusted Publishing; no API token exists for this project
     steps:
@@ -84,7 +99,8 @@ jobs:
           /tmp/ycl-pypi-smoke/bin/python -m pip install --upgrade pip
           for attempt in 1 2 3 4 5 6; do
             /tmp/ycl-pypi-smoke/bin/python -m pip install --no-cache-dir \
-              "research-engine==0.6.0" "research-engine-plugin-yourcloudlibrary==${version}" && break
+              "marginalia-ai==0.6.0" \
+              "marginalia-ai-plugin-yourcloudlibrary==${version}" && break
             sleep 30
           done
           /tmp/ycl-pypi-smoke/bin/research-engine plugin list | tee plugin-list.txt

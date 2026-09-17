@@ -1,7 +1,7 @@
-"""Integration tier: the plugin against an installed ``research-engine>=0.6``.
+"""Integration tier: the plugin against an installed ``marginalia-ai>=0.6``.
 
 Run explicitly (``pytest -m integration``) in an environment with
-``research-engine==0.6.0`` installed and ``RE_DB_URL`` naming a Postgres server
+``marginalia-ai==0.6.0`` installed and ``RE_DB_URL`` naming a Postgres server
 the suite may create its scratch database on. Nothing here talks to
 YourCloudLibrary; the book is a local fixture.
 """

@@ -1,4 +1,4 @@
-"""TEST-ONLY stand-in for ``research-engine-sdk`` 0.6 — delete when 0.6.0 is published.
+"""TEST-ONLY stand-in for ``marginalia-ai-sdk`` 0.6 — delete when 0.6.0 is published.
 
 This is NOT the SDK. It reproduces only the slice of the 0.6 contract this plugin
 consumes, following the SDK as specified (MarginaliaAI
@@ -9,7 +9,7 @@ manifest-v2 rules the plugin must satisfy (strict keys, ``plugin_id``-namespaced
 tool ids, ``plugin_data`` filesystem permission).
 
 ``tests/conftest.py`` puts it on ``sys.path`` only when no
-``research-engine-sdk>=0.6`` is installed, and the pytest header says which one is
+``marginalia-ai-sdk>=0.6`` is installed, and the pytest header says which one is
 in use. Anything here that disagrees with the published SDK is a bug in this file,
 not a contract: the real package always wins when installed.
 """

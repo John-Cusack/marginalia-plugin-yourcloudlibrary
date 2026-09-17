@@ -1,8 +1,8 @@
 """Shared fixtures, and the SDK the tests run against.
 
 Unit and contract tests need only ``research_engine_sdk`` and the plugin — never
-core. Until ``research-engine-sdk`` 0.6 is published, ``tests/_sdk_standin`` stands
-in for it; an installed ``research-engine-sdk>=0.6`` always wins. Set
+core. Until ``marginalia-ai-sdk`` 0.6 is published, ``tests/_sdk_standin`` stands
+in for it; an installed ``marginalia-ai-sdk>=0.6`` always wins. Set
 ``YCL_TEST_REQUIRE_REAL_SDK=1`` (release CI does) to fail instead of falling back.
 """
 
@@ -21,7 +21,7 @@ _MIN_SDK = (0, 6)
 
 def _installed_sdk_version() -> str | None:
     try:
-        return importlib.metadata.version("research-engine-sdk")
+        return importlib.metadata.version("marginalia-ai-sdk")
     except importlib.metadata.PackageNotFoundError:
         return None
 
@@ -40,7 +40,7 @@ USING_STANDIN_SDK = _SDK_VERSION is None or not _is_supported(_SDK_VERSION)
 if USING_STANDIN_SDK:
     if os.environ.get("YCL_TEST_REQUIRE_REAL_SDK") == "1":
         raise RuntimeError(
-            f"research-engine-sdk>=0.6 is required (found {_SDK_VERSION or 'none'})."
+            f"marginalia-ai-sdk>=0.6 is required (found {_SDK_VERSION or 'none'})."
         )
     sys.path.insert(0, str(_STANDIN))
 
@@ -49,7 +49,7 @@ def pytest_report_header(config) -> str:
     if USING_STANDIN_SDK:
         return (
             "research_engine_sdk: TEST STAND-IN (tests/_sdk_standin) — install "
-            "research-engine-sdk>=0.6 to test against the real contract"
+            "marginalia-ai-sdk>=0.6 to test against the real contract"
         )
     return f"research_engine_sdk: {_SDK_VERSION}"
 
@@ -62,7 +62,7 @@ def plugin_context(tmp_path):
     return PluginContext(
         plugin_id="yourcloudlibrary",
         data_dir=tmp_path / "plugin-data",
-        distribution_name="research-engine-plugin-yourcloudlibrary",
+        distribution_name="marginalia-ai-plugin-yourcloudlibrary",
         distribution_version="0.3.0",
     )
 

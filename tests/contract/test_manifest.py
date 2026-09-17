@@ -62,10 +62,11 @@ def test_identity_lives_in_package_metadata_not_the_manifest(raw, pyproject):
 def test_core_and_python_ranges(raw, pyproject):
     assert raw["requires"]["core_api"] == ">=0.6,<0.7"
     assert raw["requires"]["python"] == pyproject["project"]["requires-python"]
-    assert "research-engine-sdk>=0.6,<0.7" in pyproject["project"]["dependencies"]
+    assert "marginalia-ai-sdk>=0.6,<0.7" in pyproject["project"]["dependencies"]
     assert not any(
-        re.match(r"research-engine(?!-sdk)\b", dep) for dep in pyproject["project"]["dependencies"]
-    ), "plugins depend on the SDK, never on core"
+        re.match(r"marginalia-ai(?!-sdk)\b|research-engine\b", dep)
+        for dep in pyproject["project"]["dependencies"]
+    ), "plugins depend on the SDK, never on the core application"
 
 
 def test_tools_are_namespaced_importable_and_schemas_match_decorators(raw):

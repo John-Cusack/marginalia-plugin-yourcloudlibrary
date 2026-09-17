@@ -60,7 +60,7 @@ def _dist_info(wheel: zipfile.ZipFile, name: str) -> str:
 
 def test_wheel_names_match_distribution(dist):
     (path,) = dist.glob("*.whl")
-    assert path.name.startswith("research_engine_plugin_yourcloudlibrary-0.3.0-py3-none-any")
+    assert path.name.startswith("marginalia_ai_plugin_yourcloudlibrary-0.3.0-py3-none-any")
 
 
 def test_wheel_ships_manifest_and_every_entry_module(wheel):
@@ -76,7 +76,7 @@ def test_wheel_ships_manifest_and_every_entry_module(wheel):
 
 def test_wheel_contains_only_the_plugin_package(wheel):
     top_level = {name.split("/", 1)[0] for name in wheel.namelist()}
-    assert top_level == {"ycl", "research_engine_plugin_yourcloudlibrary-0.3.0.dist-info"}
+    assert top_level == {"ycl", "marginalia_ai_plugin_yourcloudlibrary-0.3.0.dist-info"}
 
 
 def test_no_sensitive_or_local_files_in_artifacts(wheel, sdist_names):
@@ -101,16 +101,19 @@ def test_entry_points_advertise_plugin_and_login(wheel):
 
 def test_metadata_is_complete(wheel):
     meta = email.parser.Parser().parsestr(_dist_info(wheel, "METADATA"))
-    assert meta["Name"] == "research-engine-plugin-yourcloudlibrary"
+    assert meta["Name"] == "marginalia-ai-plugin-yourcloudlibrary"
     assert meta["Version"] == "0.3.0"
     assert meta["Requires-Python"] == ">=3.11"
     assert meta["License-Expression"] == "Apache-2.0"
     assert meta.get_all("License-File") == ["LICENSE"]
     assert meta["Description-Content-Type"] == "text/markdown"
     requires = meta.get_all("Requires-Dist")
-    assert any(r.replace(" ", "").startswith("research-engine-sdk") and "<0.7" in r and ">=0.6" in r
+    assert any(r.replace(" ", "").startswith("marginalia-ai-sdk") and "<0.7" in r and ">=0.6" in r
                for r in requires)
-    assert not any(r.split("[")[0].split(";")[0].strip().startswith("research-engine")
-                   and not r.startswith("research-engine-sdk") for r in requires)
+    # Depend on the SDK, never on the core application — and never on a name from
+    # the retired `research-engine-*` distribution family.
+    names = [r.split("[")[0].split(";")[0].split()[0].strip().lower() for r in requires]
+    assert not any(name.startswith("research-engine") for name in names), names
+    assert not any(name == "marginalia-ai" for name in names), names
     urls = dict(u.split(", ", 1) for u in meta.get_all("Project-URL"))
     assert {"Homepage", "Source", "Issues", "Changelog"} <= set(urls)

@@ -1,5 +1,5 @@
 [project]
-name = "research-engine-plugin-yourcloudlibrary"
+name = "marginalia-ai-plugin-yourcloudlibrary"
 version = "0.3.0"
 description = "YourCloudLibrary catalog search and borrowed-book ingestion for Research Engine"
 readme = "README.md"
@@ -8,8 +8,8 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "John Cusack" }]
 keywords = [
-    "research-engine",
-    "research-engine-plugin",
+    "marginalia-ai",
+    "marginalia-ai-plugin",
     "yourcloudlibrary",
     "cloudlibrary",
     "library",
@@ -35,7 +35,7 @@ classifiers = [
 # results from a warmed browser context — measured, see IMPL_NOTES.md. The
 # Chromium build itself is never downloaded at install time.
 dependencies = [
-    "research-engine-sdk>=0.6,<0.7",
+    "marginalia-ai-sdk>=0.6,<0.7",
     "playwright>=1.40,<2",
     "httpx>=0.28.1,<1",
     "pydantic>=2.0,<3",
@@ -84,7 +84,7 @@ testpaths = ["tests"]
 addopts = ["-m", "not integration and not live"]
 markers = [
     "contract: packaging/manifest/SDK contract checks (no network, no core)",
-    "integration: needs research-engine 0.6 and a disposable Postgres (RE_DB_URL)",
+    "integration: needs marginalia-ai 0.6 and a disposable Postgres (RE_DB_URL)",
     "live: talks to the real YourCloudLibrary site with your saved session",
 ]
 

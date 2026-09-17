@@ -1,6 +1,6 @@
 """A real core ingestion client on a disposable database, for integration/live tiers.
 
-Everything that touches core lives here, behind ``research-engine>=0.6``:
+Everything that touches core lives here, behind ``marginalia-ai>=0.6``:
 
 - The database is ``research_engine.testing.resolve_test_db_url(RE_DB_URL)`` with
   this suite's own scratch database name: the host and credentials you give, never
@@ -30,7 +30,7 @@ MIN_CORE = (0, 6)
 
 def core_version() -> str | None:
     try:
-        return importlib.metadata.version("research-engine")
+        return importlib.metadata.version("marginalia-ai")
     except importlib.metadata.PackageNotFoundError:
         return None
 
@@ -38,10 +38,10 @@ def core_version() -> str | None:
 def require_core() -> None:
     version = core_version()
     if version is None:
-        pytest.skip("research-engine is not installed (pip install research-engine==0.6.0)")
+        pytest.skip("marginalia-ai is not installed (pip install marginalia-ai==0.6.0)")
     major, minor = (int(p) for p in version.split(".")[:2])
     if (major, minor) < MIN_CORE:
-        pytest.skip(f"research-engine {version} predates the 0.6 plugin contract")
+        pytest.skip(f"marginalia-ai {version} predates the 0.6 plugin contract")
 
 
 class FakeEmbedder:
