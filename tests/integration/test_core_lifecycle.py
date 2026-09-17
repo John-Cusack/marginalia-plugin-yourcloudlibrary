@@ -92,8 +92,8 @@ def cli(tmp_path_factory):
         "RE_DB_URL": db_url,
         "RE_DATA_DIR": str(root / "re-data"),
         "PYTHONPATH": str(sentinel_dir),
-        # A base core install has no local embedding or reranking model, and these
-        # commands need neither; without this the CLI refuses to start.
+        # `serve` builds core's full container, and a base install has no local
+        # embedding or reranking model. The `plugin` commands need neither.
         "RE_EMBEDDING_PROVIDER": "remote_api",
         "RE_INFERENCE_BASE_URL": os.environ.get("RE_INFERENCE_BASE_URL", "http://127.0.0.1:9"),
         "RE_RERANKER_PROVIDER": "none",
