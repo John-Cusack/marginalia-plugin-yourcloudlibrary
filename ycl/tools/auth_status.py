@@ -6,7 +6,11 @@ from research_engine.plugins.sdk import tool
 
 from .._paths import COOKIE_PATH
 from .._time import utcnow
-from ..api.cookies import decode_config_cookie, session_expiry_status
+from ..api.cookies import (
+    decode_config_cookie,
+    reading_session_status,
+    session_expiry_status,
+)
 from ..api.errors import NotAuthenticatedError
 from ..session.cookies import CookieStore
 
@@ -39,8 +43,16 @@ async def handler(**_clients) -> dict:
             "hint": "Run `uv run python -m ycl.cli.login` to authenticate.",
         }
     cookie_names = sorted({c["name"] for c in cookies})
+    reading = reading_session_status(cookies)
     return {
+        # Cookies present + decodable: catalog search/borrow should work.
         "authenticated": True,
+        # Reading/ingest needs an UNEXPIRED __session_PROD; epubservice enforces
+        # it strictly while the catalog is lenient. This is the signal that
+        # decides whether scrape/acquire_and_ingest will work.
+        "can_read": reading["ok"],
+        "reading_status": reading["reason"],
+        "reading_hint": None if reading["ok"] else reading["detail"],
         "cookie_path": str(COOKIE_PATH),
         "cookie_count": len(cookies),
         "cookie_names": cookie_names,

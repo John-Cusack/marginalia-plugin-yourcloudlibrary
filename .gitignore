@@ -161,6 +161,20 @@ venv.bak/
 scratch/
 .playwright-mcp/
 
+# Session state, borrowed/licensed text, and screenshots must never be committed
+# or packaged. The plugin keeps these under its data directory, not the repo.
+cookies.json
+borrows.json
+borrows.json.lock
+extracted/
+*.partial.txt
+*.chapters.json
+*.png
+*.jpg
+*.jpeg
+*.har
+browser-profile/
+
 # Playwright MCP scratch output (snapshots / console logs from live probes)
 .playwright-mcp/
 

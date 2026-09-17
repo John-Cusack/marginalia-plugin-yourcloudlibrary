@@ -194,14 +194,22 @@ Confirmed live with `scripts/probe_search.py` / `probe_search_live.py`:
   `owned=yes`. There is **no** separate backend call — the loader *is* the
   search endpoint (capturing all cross-host requests showed only the document
   + this one fetch; `categories` come back fully populated in the same body).
-- **Caveat:** the only session available for probing was ~7 weeks old and every
-  query returned zero hits (the rendered page agreed: "No titles match"), so the
-  *populated* result-item shape could not be captured. `ycl.api.client._parse_search_results`
-  is therefore written defensively against cloudLibrary's documented book-document
-  convention — `itemId` / `title` / `contributors[].name` / `canBorrow` (the same
-  fields the detail loader returns, see `get_book`) — and falls back to the first
-  list-of-dicts under `results.search` if the container key differs. If the live
-  shape turns out different, the fix is localized to that one function.
+- **Superseded 2026-06-30 — search needs a warmed browser context.** With a fresh
+  session the populated shape is `results.search = {totalItems, totalSegments,
+  query, items: [...]}` (20 items/segment). Each item's **`documentId`** is the
+  detail/borrow/ingest `book_id`; `id`/`bibliographicIdentifier`/`catalogItemId`
+  500 against the detail route. Items carry live availability (`totalCopies`,
+  `currentlyAvailable`, `currentlyLoaned`, `isPayPerUse`) and a `matchingScore`.
+- **Pure httpx cannot reproduce it.** Measured: a cold httpx GET (any header set,
+  including the browser's exact headers, `/featured` fetched first, or suggestion
+  priming) returns `results.search={query}` with no items; a cold Playwright
+  `ctx.request.get` returns 204. Only `ctx.request.get` **after**
+  `page.goto(/featured)` in the same browser context returns items. So
+  `ycl/api/catalog.py::CatalogSearcher` holds one warmed headless Chromium context
+  and issues cheap `ctx.request` GETs per query. This is why Playwright is a
+  runtime dependency, not just a login dependency.
+- The httpx-only `YclClient.search_catalog` from P0.3 was removed in 0.2.0: it
+  always came back empty live and keyed hits on the wrong id.
 
 ## What is *not* covered yet
 

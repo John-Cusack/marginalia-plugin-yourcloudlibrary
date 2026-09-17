@@ -1,9 +1,9 @@
-"""ycl.search_catalog — find books in the library catalog by title/author.
+"""ycl.search_catalog — search the whole YourCloudLibrary catalog (not just borrows).
 
-Solves the discoverability gap: every other tool needs the opaque ``book_id``
-(e.g. ``onc5689``), which a user has no way to know up front. This tool turns a
-human query into a list of ``{title, author, book_id, available}`` rows so the
-returned ``book_id`` can be fed straight into ycl.scrape_book / ycl.ingest_book.
+Read-only discovery: returns relevance-ranked catalog matches with live borrow
+availability and the ``documentId`` needed to acquire each one. Pairs with
+``ycl.acquire_and_ingest`` (or the core ``search_sources`` fan-out) to go from a
+topic to ingested books without the user listing each title.
 """
 
 from __future__ import annotations
@@ -11,39 +11,41 @@ from __future__ import annotations
 import structlog
 from research_engine.plugins.sdk import tool
 
-from ..api import AuthExpiredError, YclApiError
-from ._errors import RELOGIN_HINT, acquire_client
-from ._errors import err as _err
+from ..api.catalog import CatalogSearcher
+from ..api.errors import NotAuthenticatedError
+from ._errors import LOGIN_HINT
 
 log = structlog.get_logger(__name__)
+
+# This tool keeps its own long-lived warmed searcher (reused across calls so each
+# query doesn't relaunch Chromium). Separate from the provider's — single owner.
+_tool_searcher: CatalogSearcher | None = None
+
+
+def _get_searcher() -> CatalogSearcher:
+    global _tool_searcher
+    if _tool_searcher is None:
+        _tool_searcher = CatalogSearcher()
+    return _tool_searcher
 
 
 @tool(
     id="ycl.search_catalog",
     description=(
-        "Search the current library's YourCloudLibrary catalog by title, author, "
-        "or keyword. Returns matching books with their book_id, which you can pass "
-        "to ycl.scrape_book or ycl.ingest_book. Requires that you've run "
-        "ycl.cli.login at least once."
+        "Search the entire YourCloudLibrary catalog by title, author, or topic. "
+        "Returns relevance-ranked books with live availability "
+        "(currently_available/total_copies, is_pay_per_use) and a documentId you "
+        "can pass to ycl.acquire_and_ingest. Read-only — does not borrow."
     ),
     input_schema={
         "type": "object",
         "properties": {
-            "query": {
-                "type": "string",
-                "description": "Title, author, or keyword to search for.",
-            },
-            "limit": {
-                "type": "integer",
-                "default": 25,
-                "minimum": 1,
-                "maximum": 100,
-                "description": "Maximum number of results to return.",
-            },
+            "query": {"type": "string", "description": "Title, author, or topic."},
+            "limit": {"type": "integer", "default": 20, "minimum": 1, "maximum": 50},
             "available_only": {
                 "type": "boolean",
                 "default": False,
-                "description": "If true, only return titles available to borrow now.",
+                "description": "Only return titles with a copy available to borrow right now.",
             },
         },
         "required": ["query"],
@@ -51,42 +53,46 @@ log = structlog.get_logger(__name__)
 )
 async def handler(
     query: str,
-    limit: int = 25,
+    limit: int = 20,
     available_only: bool = False,
     **_clients,
 ) -> dict:
-    if not query or not query.strip():
-        return _err("invalid_input", "query is required and cannot be empty.")
-
-    client, error = acquire_client()
-    if error:
-        return error
-
-    library_key = client.library.url_name or "unknown"
+    # Reuse this tool's long-lived warmed searcher (it can block on a cold warm;
+    # it isn't under the host's tight fan-out timeout). Do NOT close it.
+    searcher = _get_searcher()
     try:
-        async with client:
-            hits = await client.search_catalog(
-                query, limit=limit, available_only=available_only
-            )
-    except AuthExpiredError as exc:
-        return _err("auth_expired", str(exc), hint=RELOGIN_HINT)
-    except YclApiError as exc:
-        log.exception("search_error", query=query, error=str(exc))
-        return _err("api_error", str(exc), query=query)
+        items = await searcher.search(query, limit=limit, available_only=available_only)
+    except NotAuthenticatedError as exc:
+        return {
+            "status": "not_authenticated",
+            "message": str(exc),
+            "hint": LOGIN_HINT,
+        }
+    except Exception as exc:
+        log.warning("search_catalog_failed", query=query, error=str(exc))
+        return {"status": "error", "message": str(exc), "query": query}
 
     return {
-        "status": "success",
+        "status": "ok",
         "query": query,
-        "library_id": library_key,
-        "library_name": client.library.name,
-        "count": len(hits),
+        "library_id": searcher.library_slug,
+        "count": len(items),
         "results": [
             {
-                "title": h.title,
-                "author": h.author,
-                "book_id": h.book_id,
-                "available": h.available,
+                "book_id": it.document_id,            # documentId — for acquire_and_ingest
+                "title": it.title,
+                "subtitle": it.subtitle,
+                "authors": it.authors,
+                "year": it.year,
+                "isbn": it.isbn,
+                "format": it.media_format,
+                "available_now": it.is_available_now,
+                "currently_available": it.currently_available,
+                "total_copies": it.total_copies,
+                "is_pay_per_use": it.is_pay_per_use,
+                "relevance": round(it.matching_score, 2),
+                "summary": it.summary[:300],
             }
-            for h in hits
+            for it in items
         ],
     }

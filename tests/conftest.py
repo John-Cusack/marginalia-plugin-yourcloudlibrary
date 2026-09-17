@@ -9,12 +9,14 @@ pass-through so the wrapped coroutine stays directly callable.
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 import types
 
 
 def _install_research_engine_stub() -> None:
-    if "research_engine" in sys.modules:
+    # Never shadow a real host engine (the ``integration`` extra installs one).
+    if "research_engine" in sys.modules or importlib.util.find_spec("research_engine"):
         return
 
     research_engine = types.ModuleType("research_engine")

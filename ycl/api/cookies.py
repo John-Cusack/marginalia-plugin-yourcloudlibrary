@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import time
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
@@ -118,6 +119,51 @@ def session_expiry_status(cookies: Iterable[dict], *, now: datetime) -> dict:
             "`python -m ycl.cli.login` soon."
         )
     return out
+
+
+def cookie_expiry(cookies: Iterable[dict], name: str) -> float | None:
+    """Return the ``expires`` epoch for *name*, or None if absent/session-cookie."""
+    cookie = _find_cookie(cookies, name)
+    if cookie is None:
+        return None
+    exp = cookie.get("expires")
+    if isinstance(exp, bool) or not isinstance(exp, (int, float)) or exp <= 0:
+        return None
+    return float(exp)
+
+
+def reading_session_status(cookies: Iterable[dict], *, now: float | None = None) -> dict:
+    """Whether the session can fetch book content (manifest/chapters).
+
+    ``epubservice.yourcloudlibrary.com`` strictly enforces ``__session_PROD``'s
+    cookie expiry (→ 401), while the catalog (``ebook.``) is lenient and keeps
+    serving search/borrow on a stale session — which masks the expiry. So "can I
+    borrow?" is NOT a reliable signal for "can I read/scrape?"; check the cookie's
+    own expiry instead. ``__session_PROD`` was measured at ~1 day.
+
+    ``ok`` is True only when ``__session_PROD`` is present AND not past its
+    ``expires``.
+    """
+    now = time.time() if now is None else now
+    cookies = list(cookies)
+    if _find_cookie(cookies, SESSION_COOKIE) is None:
+        return {
+            "ok": False,
+            "reason": "missing_session_cookie",
+            "detail": f"no {SESSION_COOKIE} cookie — run `python -m ycl.cli.login`.",
+        }
+    exp = cookie_expiry(cookies, SESSION_COOKIE)
+    if exp is not None and exp < now:
+        return {
+            "ok": False,
+            "reason": "session_expired",
+            "expires": exp,
+            "detail": (
+                f"{SESSION_COOKIE} expired — catalog search/borrow may still work but "
+                "reading/ingest will 401. Re-run `python -m ycl.cli.login`."
+            ),
+        }
+    return {"ok": True, "reason": "ok", "expires": exp}
 
 
 def decode_config_cookie(cookies: Iterable[dict]) -> LibraryInfo:

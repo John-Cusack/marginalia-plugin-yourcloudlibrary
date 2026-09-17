@@ -1,6 +1,6 @@
 [project]
 name = "marginalia-plugin-yourcloudlibrary"
-version = "0.1.0"
+version = "0.2.0"
 description = "YourCloudLibrary borrowed-book scraper and ingestion plugin for Marginalia AI"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -18,6 +18,15 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
 ]
+# Integration tests load the real host engine (SDK, chunker, ingestion contract).
+# research_engine is host-provided at plugin-load time in production; for tests we
+# pull it in editable from the sibling core checkout.
+integration = [
+    "research-engine",
+]
+
+[tool.uv.sources]
+research-engine = { path = "../MarginaliaAI/packages/core", editable = true }
 
 [build-system]
 requires = ["hatchling"]
@@ -29,6 +38,9 @@ packages = ["ycl"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: live tests — need a YCL session and/or a real Postgres",
+]
 
 [tool.ruff]
 target-version = "py311"

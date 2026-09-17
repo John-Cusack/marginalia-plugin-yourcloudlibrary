@@ -24,7 +24,7 @@ import structlog
 from playwright.async_api import async_playwright
 
 from .._paths import COOKIE_PATH
-from ..api.cookies import decode_config_cookie
+from ..api.cookies import decode_config_cookie, reading_session_status
 from ..session.cookies import CookieStore
 
 log = structlog.get_logger(__name__)
@@ -98,6 +98,20 @@ async def main() -> int:
             print(f"Authenticated as patron at: {library.name} ({library.url_name})")
         except Exception as exc:
             print(f"warning: could not decode library info from cookie: {exc}")
+
+        # __session_PROD (the reading/scrape cookie) is short-lived (~1 day) and
+        # epubservice enforces it strictly. Tell the user their scrape window so a
+        # later 401 isn't a mystery.
+        reading = reading_session_status(cookies)
+        if reading["ok"]:
+            exp = reading.get("expires")
+            when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(exp)) if exp else "this session"
+            print(
+                f"Reading/scrape enabled (reading session expires ~{when}; it is "
+                "short-lived — re-run this login when ingest starts returning 401)."
+            )
+        else:
+            print(f"warning: {reading['detail']}")
 
         store = CookieStore(COOKIE_PATH)
         store.save(cookies)

@@ -26,13 +26,15 @@ from .cookies import (
     has_session_cookie,
 )
 from .errors import AuthExpiredError, BookNotBorrowedError, NotAuthenticatedError, YclApiError
-from .types import Book, LibraryInfo, Loan, Manifest, ReadingOrderItem, SearchHit
+from .types import Book, LibraryInfo, Loan, Manifest, ReadingOrderItem
 
 log = structlog.get_logger(__name__)
 
 DEFAULT_CATALOG_NAME = "3m.us"
 EBOOK_HOST = "https://ebook.yourcloudlibrary.com"
 EPUBSERVICE_HOST = "https://epubservice.yourcloudlibrary.com"
+# book.status values meaning "currently borrowed by this patron".
+_LOANED_STATUSES = frozenset({"LOAN", "LOANED"})
 EPUB_ORIGIN = "https://epub.yourcloudlibrary.com"
 
 # The active-loans response comes from the My-Books page's ``.current`` child
@@ -41,8 +43,6 @@ EPUB_ORIGIN = "https://epub.yourcloudlibrary.com"
 DETAIL_ROUTE = "routes/library.$name.detail.$id"
 LOANS_ROUTE = "routes/library.$name.mybooks.current"
 LOANS_PAGE_SIZE = 20
-# Catalog-search loader route, hit via the same ?_data= trick (see IMPL_NOTES.md).
-SEARCH_ROUTE = "routes/library.$name.search"
 
 # Retry policy for transient failures (timeouts, connection drops, 429, 5xx).
 # A single network blip used to fail a whole 200-page book; these defaults turn
@@ -150,21 +150,52 @@ class YclClient:
             raise YclApiError(
                 f"detail loader returned no book object for book_id={book_id!r}"
             )
-        return Book(
-            item_id=book_raw.get("itemId") or book_id,
-            isbn=str(book_raw.get("isbn") or ""),
-            title=book_raw.get("title") or "Untitled",
-            status=str(book_raw.get("status") or ""),
-            can_read=bool(book_raw.get("canRead") in (True, "True", "true")),
-            page_count=_safe_int(book_raw.get("page")),
-            publisher=book_raw.get("publisher"),
-            language=book_raw.get("language"),
-            media_type=book_raw.get("mediaType"),
-            author=_extract_author(book_raw),
-            subjects=_extract_subjects(book_raw.get("contentCategories")),
-            description=book_raw.get("description"),
-            raw=book_raw,
-        )
+        return _book_from_raw(book_raw, book_id)
+
+    async def borrow(self, book_id: str) -> Book:
+        """Borrow ``book_id`` (a catalog ``documentId``).
+
+        Drives the same detail loader as :meth:`get_book` with ``action=borrow``.
+        On success the returned :class:`Book` has ``status == "LOAN"`` and
+        ``can_read == True``. A loan-limit or other refusal comes back as a
+        :class:`YclApiError` carrying the server's ``error`` string rather than
+        a successful ``Book`` — callers can branch on that.
+        """
+        return await self._detail_action(book_id, "borrow")
+
+    async def return_book(self, book_id: str) -> Book:
+        """Return a borrowed ``book_id``. After success ``status`` reverts to
+        ``CAN_LOAN`` (or ``CAN_HOLD`` if no copies are free)."""
+        return await self._detail_action(book_id, "return")
+
+    async def _detail_action(self, book_id: str, action: str) -> Book:
+        slug = self.library.url_name
+        if not slug:
+            raise YclApiError("library url_name unknown — cookie may be malformed")
+        url = f"{EBOOK_HOST}/library/{slug}/detail/{book_id}"
+        params = {"action": action, "itemId": book_id, "_data": DETAIL_ROUTE}
+        data = await self._get_json(url, params=params)
+        if not isinstance(data, dict):
+            raise YclApiError(f"{action} loader returned a non-object for book_id={book_id!r}")
+        err = data.get("error")
+        book_raw = data.get("book") or {}
+        if err and not book_raw:
+            raise YclApiError(f"{action} failed for book_id={book_id!r}: {err}")
+        if not book_raw:
+            raise YclApiError(
+                f"{action} loader returned no book object for book_id={book_id!r}"
+            )
+        book = _book_from_raw(book_raw, book_id)
+        # Defensive: YCL may return {book, error} together when an action is
+        # refused (e.g. loan-limit). Treat it as a failure when the action did
+        # not achieve its goal, so callers get the clear error rather than a
+        # silently non-applied Book.
+        status = book.status.upper()
+        if err and action == "borrow" and status not in _LOANED_STATUSES:
+            raise YclApiError(f"borrow refused for book_id={book_id!r}: {err}")
+        if err and action == "return" and status in _LOANED_STATUSES:
+            raise YclApiError(f"return refused for book_id={book_id!r}: {err}")
+        return book
 
     async def get_loans(
         self,
@@ -264,60 +295,6 @@ class YclClient:
                 "session likely expired; re-run ycl.cli.login."
             )
         return decode_chapter_body(resp.text)
-
-    async def search_catalog(
-        self,
-        query: str,
-        *,
-        limit: int | None = 25,
-        available_only: bool = False,
-    ) -> list[SearchHit]:
-        """Search the library catalog for ``query``.
-
-        Returns up to ``limit`` hits, each carrying the opaque ``book_id`` that
-        the rest of the plugin (scrape/ingest/check) keys off — so a user can go
-        from a title to a scrape without knowing the id up front.
-
-        Route note: the search page is a Remix loader, same ``?_data=`` trick as
-        :meth:`get_book`. The route id ``routes/library.$name.search`` and its
-        query params were confirmed against the live site (200 application/json
-        with top-level ``results``/``categories``/``segment``). The *populated*
-        result-item shape could not be captured live (the only available session
-        was stale and every probe returned zero matches), so :func:`_parse_search_results`
-        is written defensively against cloudLibrary's documented book-document
-        convention (``itemId`` / ``title`` / ``contributors[].name`` / ``canBorrow``)
-        rather than a single hard-coded key. See scripts/probe_search*.py.
-        """
-        if not query or not query.strip():
-            raise YclApiError("search query is empty")
-        slug = self.library.url_name
-        if not slug:
-            raise YclApiError("library url_name unknown — cookie may be malformed")
-        url = f"{EBOOK_HOST}/library/{slug}/search"
-        params = {
-            "query": query.strip(),
-            # The remaining params mirror what the live search UI sends; empty
-            # strings are the UI's "no filter" sentinel (format = any media type).
-            # "orderBy" is spelled "relevence" by the upstream app — verbatim.
-            "format": "",
-            "available": "available" if available_only else "any",
-            "language": "",
-            "sort": "",
-            "orderBy": "relevence",
-            "owned": "yes",
-            "_data": SEARCH_ROUTE,
-        }
-        payload = await self._get_json(url, params=params)
-        hits = _parse_search_results(payload)
-        if available_only:
-            # The server-side available= filter is unconfirmed, so backstop it
-            # client-side. Drop only *known*-unavailable hits; keep unknowns
-            # (available is None) since the result shape isn't pinned and over-
-            # filtering would hide genuine matches when the field is absent.
-            hits = [h for h in hits if h.available is not False]
-        if limit is None or limit < 0:
-            return hits
-        return hits[:limit]
 
     # ----- internals -------------------------------------------------------
 
@@ -472,89 +449,6 @@ def _extract_author(book_raw: dict[str, Any]) -> str | None:
     return None
 
 
-# Keys under results.search that, in cloudLibrary builds, hold the hit list.
-# Tried in order; if none match we fall back to the first list-of-dicts found.
-_SEARCH_LIST_KEYS = ("documents", "docs", "items", "results", "entries", "hits", "books")
-
-
-def _parse_search_results(payload: Any) -> list[SearchHit]:
-    """Map a search-loader payload to :class:`SearchHit` rows.
-
-    Defensive by design — see :meth:`YclClient.search_catalog` for why the exact
-    container key isn't pinned. The loader nests hits under
-    ``payload["results"]["search"]``; we locate the document list there and map
-    each book document via the same field names the detail loader uses.
-    """
-    if not isinstance(payload, dict):
-        return []
-    results = payload.get("results")
-    if not isinstance(results, dict):
-        return []
-    search = results.get("search")
-    if not isinstance(search, dict):
-        return []
-
-    docs: list[Any] | None = None
-    for key in _SEARCH_LIST_KEYS:
-        value = search.get(key)
-        if isinstance(value, list):
-            docs = value
-            break
-    if docs is None:
-        for value in search.values():
-            if isinstance(value, list) and value and isinstance(value[0], dict):
-                docs = value
-                break
-    if not docs:
-        # An empty query result is normal. But if results.search carries real
-        # content (beyond the echoed "query") and we still found no document
-        # list, our container-key guess is probably wrong — flag it loudly so a
-        # silent zero-hit doesn't get mistaken for "no matches".
-        extra_keys = [k for k in search if k != "query"]
-        if extra_keys:
-            log.warning(
-                "search_no_doc_list_matched",
-                search_keys=list(search),
-                hint="results.search shape may differ from _SEARCH_LIST_KEYS",
-            )
-        return []
-
-    hits: list[SearchHit] = []
-    for doc in docs:
-        if not isinstance(doc, dict):
-            continue
-        book_id = doc.get("itemId") or doc.get("id") or doc.get("documentId")
-        if not book_id:
-            continue
-        hits.append(
-            SearchHit(
-                book_id=str(book_id),
-                title=doc.get("title") or "Untitled",
-                author=_extract_author(doc),
-                available=_extract_available(doc),
-            )
-        )
-    return hits
-
-
-def _extract_available(doc: dict[str, Any]) -> bool | None:
-    """True when a copy can be borrowed now, False when only holdable.
-
-    ``None`` if the document carries no availability signal we recognize.
-    """
-    if "canBorrow" in doc:
-        return bool(doc.get("canBorrow"))
-    if "available" in doc:
-        return bool(doc.get("available"))
-    copies = _safe_int(doc.get("availableCopies"))
-    if copies is not None:
-        return copies > 0
-    status = doc.get("status")
-    if isinstance(status, str) and status:
-        return status.upper() in {"CAN_LOAN", "AVAILABLE"}
-    return None
-
-
 def _extract_subjects(content_categories: Any) -> list[str]:
     """Flatten ``contentCategories`` into a de-duplicated list of subject names.
 
@@ -578,6 +472,29 @@ def _extract_subjects(content_categories: Any) -> list[str]:
         if cleaned and cleaned not in subjects:
             subjects.append(cleaned)
     return subjects
+
+
+def _book_from_raw(book_raw: dict[str, Any], book_id: str) -> Book:
+    """Build a :class:`Book` from a detail-loader ``book`` object.
+
+    Single source of truth for the field mapping shared by :meth:`YclClient.get_book`
+    and the borrow/return actions.
+    """
+    return Book(
+        item_id=book_raw.get("itemId") or book_id,
+        isbn=str(book_raw.get("isbn") or ""),
+        title=book_raw.get("title") or "Untitled",
+        status=str(book_raw.get("status") or ""),
+        can_read=bool(book_raw.get("canRead") in (True, "True", "true")),
+        page_count=_safe_int(book_raw.get("page")),
+        publisher=book_raw.get("publisher"),
+        language=book_raw.get("language"),
+        media_type=book_raw.get("mediaType"),
+        author=_extract_author(book_raw),
+        subjects=_extract_subjects(book_raw.get("contentCategories")),
+        description=book_raw.get("description"),
+        raw=book_raw,
+    )
 
 
 def _loan_from_item(item: dict[str, Any]) -> Loan:

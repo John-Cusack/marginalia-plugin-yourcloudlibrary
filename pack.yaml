@@ -1,7 +1,7 @@
 name: yourcloudlibrary
-version: 0.1.0
+version: 0.2.0
 author: "MarginaliaAI"
-description: "YourCloudLibrary borrowed-book scraper. Captures library ebooks before borrow expires and ingests into the corpus."
+description: "YourCloudLibrary catalog search + borrowed-book ingestion. Searches the whole library catalog, contributes to cross-library search_sources, and can borrow→ingest→return books to recycle loan slots."
 
 requires:
   core_api: ">=0.2.0,<1.0.0"
@@ -35,7 +35,7 @@ provides:
       description: "Report whether the plugin has YCL session cookies; tells the user how to log in if not."
     - id: ycl.search_catalog
       entry: ycl.tools.search_catalog:handler
-      description: "Search the library catalog by title/author/keyword; returns book_ids to feed scrape/ingest."
+      description: "Search the entire YourCloudLibrary catalog by title/author/topic. Read-only; returns availability + documentId."
     - id: ycl.scrape_book
       entry: ycl.tools.scrape_book:handler
       description: "Scrape a borrowed book from YourCloudLibrary via the YCL API and save plain text to disk."
@@ -57,3 +57,11 @@ provides:
     - id: ycl.forget_book
       entry: ycl.tools.forget_book:handler
       description: "Remove a borrow record from the local store. Does not delete corpus passages."
+    - id: ycl.acquire_and_ingest
+      entry: ycl.tools.acquire_and_ingest:handler
+      description: "Borrow a catalog book by documentId, scrape+ingest it, then return the loan to free a slot (recycling)."
+
+  source_search:
+    - id: yourcloudlibrary
+      entry: ycl.source_provider:YclSourceProvider
+      description: "Whole-catalog discovery for YourCloudLibrary: maps a query to borrowable/purchasable matches with ingest actions."

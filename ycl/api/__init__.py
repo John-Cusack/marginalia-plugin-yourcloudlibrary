@@ -30,7 +30,6 @@ from .types import (
     Manifest,
     ReadingOrderItem,
     ScrapeResult,
-    SearchHit,
 )
 
 __all__ = [
@@ -43,7 +42,6 @@ __all__ = [
     "NotAuthenticatedError",
     "ReadingOrderItem",
     "ScrapeResult",
-    "SearchHit",
     "YclApiError",
     "YclClient",
     "scrape_book",

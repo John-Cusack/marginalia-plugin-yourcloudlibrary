@@ -13,7 +13,7 @@ page book scrapes in ~2 seconds.
 
 ```bash
 uv sync
-uv run playwright install chromium      # only used by the one-time login
+uv run playwright install chromium      # login + catalog search
 uv run python -m ycl.cli.login          # opens a Chromium window; sign in
 ```
 
@@ -23,8 +23,9 @@ saves them to `~/.marginalia/plugins/yourcloudlibrary/cookies.json`. From
 that point forward, all the MCP tools work via plain httpx with no
 interactive UI.
 
-Re-run `python -m ycl.cli.login` whenever the session expires (typically
-every 30 days, or sooner if your library forces re-auth).
+Re-run `python -m ycl.cli.login` whenever reading stops working. The
+`__session_PROD` reading cookie lasts about a day; `ycl.auth_status` reports
+`can_read=false` once it expires, even though catalog search may still work.
 
 ## How it actually works
 
@@ -66,7 +67,8 @@ patron id) is read from the `__config_PROD` cookie at runtime.
 ## MCP tools
 
 - `ycl.auth_status` — report whether session cookies are present and which library.
-- `ycl.search_catalog` — search the catalog by title/author/keyword; returns `book_id`s to feed the other tools.
+- `ycl.search_catalog` — relevance search over the whole library catalog with live availability; returns the `documentId` (`book_id`) to feed the other tools. Runs in a warmed headless Chromium context (see `IMPL_NOTES.md`).
+- `ycl.acquire_and_ingest` — borrow a catalog book, scrape + ingest it, then return the loan (default) to free the slot. Never returns a loan you already had.
 - `ycl.scrape_book` — fetch a borrowed book's full text and save to disk.
 - `ycl.ingest_book` — fetch (if needed) and ingest into the corpus as `ycl_book`.
 - `ycl.check_book` — borrow + disk + corpus state for one book; calls the live API by default.
@@ -74,6 +76,10 @@ patron id) is read from the `__config_PROD` cookie at runtime.
 - `ycl.list_books` — list known borrows for the current library.
 - `ycl.record_borrow` — register a loan without scraping (for queueing).
 - `ycl.forget_book` — remove a borrow record (corpus passages are kept).
+
+The plugin also registers a `search_sources` provider (`ycl.source_provider:YclSourceProvider`) so
+core's cross-library discovery includes YCL catalog matches, each with an
+`ycl.acquire_and_ingest` action.
 
 ## Storage
 
@@ -98,9 +104,14 @@ All timestamps are stored as UTC ISO 8601 with `Z` suffix.
 ## Development
 
 ```bash
-uv run --extra dev pytest               # unit tests, no network
-uv run python -m ycl.cli.login           # one-time browser login
+uv run --extra dev pytest tests/unit                          # unit tests, no network
+uv run --extra dev --extra integration pytest -m integration  # live YCL + Postgres
+uv run python -m ycl.cli.login                                # one-time browser login
 ```
+
+The integration suite writes to a scratch database derived from `RE_DB_URL`
+and removes what it created. The borrow/return tests additionally require
+`YCL_LIVE_ACQUIRE=1` because they borrow a real book on your account.
 
 Probe scripts (under `scripts/`) capture and analyze YCL traffic. See
 `IMPL_NOTES.md` for the live-traffic findings that drove the API-only
