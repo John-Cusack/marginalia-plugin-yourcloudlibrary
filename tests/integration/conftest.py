@@ -1,178 +1,63 @@
-"""Integration-test fixtures: a REAL ingestion client + a live YCL session guard.
+"""Integration tier: the plugin against an installed ``research-engine>=0.6``.
 
-Runs against the host engine (``research_engine``, pulled in editable via the
-``integration`` extra) and a real Postgres. The DB write is genuine; only the
-embedder is faked (deterministic vectors) so we don't call a real embedding model.
-
-Run:  uv run --extra dev --extra integration python -m pytest -m integration
-Needs: a logged-in YCL session (``python -m ycl.cli.login``) and a reachable
-Postgres (the dev one at localhost:5435, or ``RE_DB_URL``). Tests skip cleanly
-when either is missing.
+Run explicitly (``pytest -m integration``) in an environment with
+``research-engine==0.6.0`` installed and ``RE_DB_URL`` naming a Postgres server
+the suite may create its scratch database on. Nothing here talks to
+YourCloudLibrary; the book is a local fixture.
 """
 
 from __future__ import annotations
 
-import hashlib
-import os
+import base64
+import json
 
 import pytest
-import pytest_asyncio
 
-DEFAULT_DB_URL = "postgresql+asyncpg://re_dev:re_dev_pass@localhost:5435/research_engine"
+from tests._core_fixtures import ingestion  # noqa: F401 — re-exported fixture
+from ycl.api.types import Chapter, ScrapeResult
 
-
-def _db_url() -> str:
-    """The database these tests may write to — never the real corpus.
-
-    This suite runs the *true* ingest path: real document, passage, embedding
-    and FTS writes. Pointed at the dev database it does not test ingestion, it
-    performs it — which is how 12 borrowed books and 2,095 stub embeddings ended
-    up in a live corpus, leaving those passages invisible to semantic search
-    because the stub embedder is not the search model.
-
-    `resolve_test_db_url` redirects the database name and keeps everything else,
-    so this reaches a scratch database by default. Set
-    RE_TEST_ALLOW_REAL_CORPUS=1 to opt out, deliberately.
-    """
-    from research_engine.testing import resolve_test_db_url
-
-    return resolve_test_db_url(os.environ.get("RE_DB_URL", DEFAULT_DB_URL))
+FIXTURE_LIBRARY = "FixtureLibrary"
+FIXTURE_BOOK_ID = "fixture0001"
 
 
-class FakeEmbedder:
-    """Deterministic, dependency-free EmbeddingPort impl.
-
-    ``core.passage_embeddings.embedding`` is an unconstrained ``vector`` with no
-    fixed-dim index, so a small dim is fine and fast. Same text → same vector, so
-    ingestion is reproducible.
-    """
-
-    model_name = "fake-test-embedder"
-    model_version = "1.0"
-    dim = 8
-
-    def _vec(self, text: str) -> list[float]:
-        h = hashlib.sha256(text.encode("utf-8")).digest()
-        return [h[i] / 255.0 for i in range(self.dim)]
-
-    async def embed(self, text: str) -> list[float]:
-        return self._vec(text)
-
-    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        return [self._vec(t) for t in texts]
+def fake_session_cookies() -> list[dict]:
+    """Syntactically valid session cookies. They authenticate nothing."""
+    config = {"library_info": {"name": "Fixture Library", "urlName": FIXTURE_LIBRARY},
+              "login_info": {"library": "fixture"}}
+    return [
+        {"name": "__config_PROD", "value": base64.b64encode(json.dumps(config).encode()).decode(),
+         "domain": ".yourcloudlibrary.com", "expires": -1},
+        {"name": "__session_PROD", "value": "fixture-session", "domain": ".yourcloudlibrary.com",
+         "expires": -1},
+    ]
 
 
-@pytest_asyncio.fixture
-async def ingestion():
-    """A real ``IngestionOrchestrator`` backed by the test Postgres + FakeEmbedder.
+def fixture_book(book_id: str = FIXTURE_BOOK_ID) -> ScrapeResult:
+    """A small original book: three chapters of generated prose."""
 
-    Matches exactly what the plugin host injects as the ``ingestion`` client, so
-    the tool handlers run their true ingest path (real doc/passage/embedding/FTS
-    writes). Skips if the engine or DB is unreachable.
-    """
-    pytest.importorskip("research_engine", reason="install the 'integration' extra")
-    from research_engine.adapters.storage.postgres.engine import build_engine
-    from research_engine.adapters.storage.postgres.repositories.documents import PGDocumentRepo
-    from research_engine.adapters.storage.postgres.repositories.passages import PGPassageRepo
-    from research_engine.services.ingestion.orchestrator import IngestionOrchestrator
-    from research_engine.testing import Corpus, CorpusFootprint, ensure_test_database
+    def prose(topic: str) -> str:
+        return " ".join(
+            f"Paragraph {i} considers {topic} from angle number {i}, noting how the "
+            f"argument develops and what the reader should carry forward."
+            for i in range(1, 60)
+        )
 
-    db_url = _db_url()
-    if not await ensure_test_database(db_url):
-        pytest.skip(f"No reachable test Postgres at {db_url}")
-    try:
-        engine = await build_engine(db_url)
-        async with engine.begin() as conn:
-            await conn.exec_driver_sql("SELECT 1")
-    except Exception as exc:  # noqa: BLE001 — any connectivity failure → skip
-        pytest.skip(f"No reachable test Postgres at {db_url}: {exc}")
-
-    orchestrator = IngestionOrchestrator(
-        docs=PGDocumentRepo(engine),
-        passages=PGPassageRepo(engine),
-        embedding=FakeEmbedder(),
-        ingestion_runs=object(),   # unused by find_existing / ingest_drafts
-        dispatcher=object(),       # unused by find_existing / ingest_drafts
-        engine=engine,
-    )
-    # Track what the ingest under test creates, and remove it afterwards. The
-    # footprint check is the backstop: if anything is left behind, the suite
-    # fails rather than quietly growing the database.
-    scratch = Corpus(engine)
-    orchestrator._scratch_corpus = scratch  # noqa: SLF001 — tests adopt ids via this
-    before = await CorpusFootprint.measure(engine)
-    try:
-        yield orchestrator
-    finally:
-        try:
-            await _adopt_documents_created_during(engine, scratch, before)
-            await scratch.cleanup()
-            before.assert_unchanged(await CorpusFootprint.measure(engine))
-        finally:
-            await engine.dispose()
-
-
-async def _adopt_documents_created_during(engine, scratch, before) -> None:
-    """Claim every document that appeared while the test ran.
-
-    The handlers create documents themselves, so the fixture cannot know their
-    ids up front. Anything newer than the pre-test high-water mark belongs to
-    this test.
-    """
-    import sqlalchemy as sa
-    from research_engine.adapters.storage.postgres.schema import documents
-
-    async with engine.connect() as conn:
-        rows = (
-            await conn.execute(
-                sa.select(documents.c.id).order_by(documents.c.ingested_at.desc()).limit(
-                    max(0, (await conn.execute(
-                        sa.select(sa.func.count()).select_from(documents)
-                    )).scalar_one() - before.documents)
-                )
-            )
-        ).all()
-    for row in rows:
-        scratch.adopt(row[0])
+    chapters = [
+        Chapter(index=0, href="OEBPS/c1.xhtml", title="On Libraries", text=prose("libraries")),
+        Chapter(index=1, href="OEBPS/c2.xhtml", title="On Loans", text=prose("loans")),
+        Chapter(index=2, href="OEBPS/c3.xhtml", title="On Returns", text=prose("returns")),
+    ]
+    return ScrapeResult(book_id=book_id, isbn="0000000000000", title="A Fixture Book",
+                        chapters=chapters, author="Test, Author")
 
 
 @pytest.fixture
-def ycl_session():
-    """Skip unless an unexpired YCL catalog session is on disk.
-
-    The catalog needs ``__config_PROD``; a browser context silently drops an
-    expired cookie, so a stale file would fail as "not authenticated" against
-    the live site rather than skip.
-    """
-    import time
-
-    from ycl._paths import COOKIE_PATH
-    from ycl.api.cookies import cookie_expiry
+def seeded_context(plugin_context, plugin_paths):
+    """Plugin data dir holding fake cookies and a cached fixture book (no network needed)."""
+    from ycl._textcache import write_text_cache
     from ycl.session.cookies import CookieStore
 
-    cookies = CookieStore(COOKIE_PATH).load()
-    if not cookies:
-        pytest.skip("No YCL session cookies — run `python -m ycl.cli.login` once.")
-    expires = cookie_expiry(cookies, "__config_PROD")
-    if expires is not None and expires < time.time():
-        pytest.skip("YCL catalog session expired — re-run `python -m ycl.cli.login`.")
-
-
-@pytest.fixture
-def ycl_can_read():
-    """Skip unless the session can actually fetch book content.
-
-    Reading/scrape needs an unexpired ``__session_PROD`` (epubservice enforces it
-    strictly). On a stale session we SKIP — not fail — since the fix is a user
-    re-login, not a code bug.
-    """
-    from ycl._paths import COOKIE_PATH
-    from ycl.api.cookies import reading_session_status
-    from ycl.session.cookies import CookieStore
-
-    cookies = CookieStore(COOKIE_PATH).load()
-    if not cookies:
-        pytest.skip("No YCL session cookies — run `python -m ycl.cli.login`.")
-    status = reading_session_status(cookies)
-    if not status["ok"]:
-        pytest.skip(f"YCL reading session unavailable ({status['reason']}) — re-run login.")
+    CookieStore(plugin_paths.cookie_path).save(fake_session_cookies())
+    book = fixture_book()
+    write_text_cache(plugin_paths, FIXTURE_LIBRARY, book.book_id, book)
+    return plugin_context, book

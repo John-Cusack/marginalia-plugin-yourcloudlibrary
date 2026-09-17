@@ -2,6 +2,72 @@
 
 All notable changes to this plugin. Versions follow PEP 440.
 
+## 0.3.0 — unreleased
+
+Requires `research-engine` 0.6.x and `research-engine-sdk` 0.6.x. This is a clean
+cutover; see "Upgrading from 0.2.x" in the README.
+
+### Changed
+
+- **Package renamed** from `marginalia-plugin-yourcloudlibrary` to
+  `research-engine-plugin-yourcloudlibrary`, with complete PyPI metadata (README,
+  Apache-2.0 license expression and file, classifiers, keywords, project URLs).
+- **Entry-point activation.** The wheel advertises
+  `research_engine.plugins: yourcloudlibrary = ycl`. Core discovers it and reads the
+  manifest without importing the plugin; nothing loads until
+  `research-engine plugin enable yourcloudlibrary`.
+- **Manifest moved and converted.** Root `pack.yaml` is now `ycl/plugin.yaml`
+  (schema v2, `plugin_id: yourcloudlibrary`, `core_api >=0.6,<0.7`) and ships in the
+  wheel. Identity, version, and dependencies live only in `pyproject.toml`. Every
+  tool's full input schema is in the manifest.
+- **Tool ids renamed** from `ycl.*` to `yourcloudlibrary.*` (MCP names
+  `yourcloudlibrary_*`), as manifest v2 requires tool ids to be namespaced by
+  `plugin_id`. Source-search `ingest_action`s name
+  `yourcloudlibrary.acquire_and_ingest`.
+- **SDK cutover.** Every import of `research_engine.plugins.sdk` and
+  `research_engine.domain.source_search` now comes from `research_engine_sdk`. No
+  runtime module imports core, and the package depends on the SDK, not on core.
+- **Core does the chunking.** Ingestion calls `IngestionClient.ingest_document()`
+  with the canonical text; core applies `ycl_book`'s `prose_window` chunker from the
+  manifest. Chapters are sent as sections and become document nodes, replacing the
+  per-passage `chapter_index`/`chapter_title` keys the plugin used to write. The
+  document source and metadata are unchanged. `yourcloudlibrary.ingest_book` and
+  `yourcloudlibrary.acquire_and_ingest` share one ingestion path.
+- **Source-search provider contract.** `YclSourceProvider` returns SDK
+  `SourceMatch` DTOs and accepts an optional `PluginContext`.
+- **Data directory.** State moved from `~/.marginalia/plugins/yourcloudlibrary` to
+  `PluginContext.data_dir` (default `~/.research-engine/plugin-data/yourcloudlibrary`,
+  following `RE_DATA_DIR`). Tools, the borrow registry, the cookie store, the
+  provider, and the login command all resolve that one directory. Books ingested
+  under the old path are still recognised as ingested.
+- **Session file** is written atomically and owner-only (`0600`).
+- `yourcloudlibrary.search_catalog` errors use the standard
+  `{"status": "error", "error_type": ...}` envelope, and a missing browser reports
+  `browser_unavailable` with the install command.
+- Network allowlist narrowed from `*.yourcloudlibrary.com` to the hosts the code
+  contacts: `ebook.`, `epubservice.`, and `www.yourcloudlibrary.com`.
+
+### Added
+
+- **`research-engine-ycl-login`** console script replaces
+  `python -m ycl.cli.login`. It reports a missing Playwright or Chromium with the
+  exact install command, validates the session before saving it, redacts
+  secrets from output, accepts `--library` and `--data-dir`, and exits non-zero on
+  failure.
+- **`research-engine-ycl-login migrate`** copies pre-0.3.0 data after showing every
+  source → destination pair. It refuses on conflicting destinations, verifies
+  copies and reads the migrated session and registry back, and deletes the
+  originals only when asked.
+- Test tiers: unit (SDK + plugin), contract (manifest, entry point, schemas, wheel and
+  sdist contents), integration (core 0.6 + a disposable database), and opt-in live.
+
+### Removed
+
+- Manifest `requires.pip` and `requires.setup_commands`. Installing or enabling the
+  plugin never downloads a browser; run `python -m playwright install chromium`
+  yourself.
+- The `integration` extra and its path dependency on a core checkout.
+
 ## 0.2.0 — 2026-06-30
 
 ### Added

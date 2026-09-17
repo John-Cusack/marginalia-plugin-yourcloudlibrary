@@ -32,7 +32,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ._paths import BORROWS_PATH
 from ._time import days_until, from_iso, utcnow
 
 _StateT = dict[str, dict[str, dict[str, Any]]]
@@ -46,7 +45,7 @@ class BorrowStore:
     this scale (a user has, at most, hundreds of borrows over many years).
     """
 
-    def __init__(self, path: Path = BORROWS_PATH) -> None:
+    def __init__(self, path: Path) -> None:
         self.path = Path(path)
 
     # --- read paths --------------------------------------------------------
@@ -58,6 +57,11 @@ class BorrowStore:
     def list(self, library_id: str) -> list[dict[str, Any]]:
         with self._shared_lock() as state:
             return list(state.get(library_id, {}).values())
+
+    def library_ids(self) -> list[str]:
+        """Every library partition present in the store."""
+        with self._shared_lock() as state:
+            return sorted(state)
 
     def is_active(
         self,
@@ -156,7 +160,7 @@ class BorrowStore:
         Yields the mutable state dict (``{library_id: {book_id: record}}``) and
         writes it back exactly once, atomically, on clean exit. Nothing is
         written if the body raises. Use this when a single logical operation
-        touches many records (e.g. ``ycl.sync_loans`` upserting every active
+        touches many records (e.g. ``yourcloudlibrary.sync_loans`` upserting every active
         loan and reconciling returns) so the cost is one read + one write
         instead of one per record.
         """

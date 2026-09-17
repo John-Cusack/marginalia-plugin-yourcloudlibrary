@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: lint, unit, contract (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    env:
+      # Fail rather than fall back to tests/_sdk_standin: CI proves the real SDK.
+      YCL_TEST_REQUIRE_REAL_SDK: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --extra dev
+      - run: uv run ruff check ycl tests
+      - run: uv run pytest -q
+
+  integration:
+    name: installed wheel against research-engine 0.6
+    runs-on: ubuntu-latest
+    needs: test
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: re_test
+          POSTGRES_PASSWORD: re_test
+          POSTGRES_DB: re_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U re_test" --health-interval 5s
+          --health-timeout 5s --health-retries 20
+    env:
+      RE_DB_URL: postgresql+asyncpg://re_test:re_test@localhost:5432/re_test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+      - run: uv build
+      - name: Install exact core and the built wheel in a clean venv
+        run: |
+          python3 -m venv /tmp/ycl-ci
+          /tmp/ycl-ci/bin/python -m pip install --upgrade pip
+          /tmp/ycl-ci/bin/python -m pip install "research-engine==0.6.0" dist/*.whl \
+            "pytest>=8" "pytest-asyncio>=0.23" "pyyaml>=6"
+      - name: Integration tier, outside the checkout
+        run: |
+          # Copy only the tests so `ycl` imports from the installed wheel.
+          mkdir -p /tmp/ycl-it && cp -r tests /tmp/ycl-it/
+          cd /tmp/ycl-it
+          PATH=/tmp/ycl-ci/bin:$PATH YCL_TEST_REQUIRE_REAL_SDK=1 \
+            python -m pytest -p no:cacheprovider -o asyncio_mode=auto -m integration -rs tests/integration

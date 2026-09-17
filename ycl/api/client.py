@@ -17,7 +17,6 @@ from typing import Any
 import httpx
 import structlog
 
-from .._paths import COOKIE_PATH
 from ..session.cookies import CookieStore
 from .cookies import (
     SESSION_COOKIE,
@@ -25,7 +24,13 @@ from .cookies import (
     decode_config_cookie,
     has_session_cookie,
 )
-from .errors import AuthExpiredError, BookNotBorrowedError, NotAuthenticatedError, YclApiError
+from .errors import (
+    LOGIN_COMMAND,
+    AuthExpiredError,
+    BookNotBorrowedError,
+    NotAuthenticatedError,
+    YclApiError,
+)
 from .types import Book, LibraryInfo, Loan, Manifest, ReadingOrderItem
 
 log = structlog.get_logger(__name__)
@@ -100,7 +105,7 @@ class YclClient:
     @classmethod
     def from_cookie_store(
         cls,
-        path: Path = COOKIE_PATH,
+        path: Path,
         *,
         catalog_name: str = DEFAULT_CATALOG_NAME,
     ) -> YclClient:
@@ -108,7 +113,7 @@ class YclClient:
         cookies = store.load()
         if not cookies:
             raise NotAuthenticatedError(
-                f"No cookie file at {path}. Run `python -m ycl.cli.login` once."
+                f"No cookie file at {path}. Run `{LOGIN_COMMAND}` once."
             )
         # The session cookie carries the JWT every authenticated request needs;
         # __config_PROD alone (library identity) is not enough to talk to the
@@ -116,7 +121,7 @@ class YclClient:
         if not has_session_cookie(cookies):
             raise NotAuthenticatedError(
                 f"{SESSION_COOKIE} cookie missing from {path}; the saved session "
-                "is incomplete. Run `python -m ycl.cli.login` again."
+                f"is incomplete. Run `{LOGIN_COMMAND}` again."
             )
         library = decode_config_cookie(cookies)
         jar = cookies_to_jar(cookies)
@@ -249,7 +254,7 @@ class YclClient:
         if _looks_like_html(resp):
             raise AuthExpiredError(
                 f"GET {lookup_url} returned HTML where a manifest URL was "
-                "expected — session likely expired; re-run ycl.cli.login."
+                f"expected — session likely expired; re-run `{LOGIN_COMMAND}`."
             )
         manifest_url = _coerce_url_payload(resp.text)
         # Step 2: fetch the manifest itself.
@@ -292,7 +297,7 @@ class YclClient:
         if _looks_like_html(resp):
             raise AuthExpiredError(
                 f"GET {url} returned HTML where chapter content was expected — "
-                "session likely expired; re-run ycl.cli.login."
+                f"session likely expired; re-run `{LOGIN_COMMAND}`."
             )
         return decode_chapter_body(resp.text)
 
@@ -317,7 +322,7 @@ class YclClient:
             if _looks_like_html(resp):
                 raise AuthExpiredError(
                     f"GET {url} returned HTML where JSON was expected — session "
-                    "likely expired; re-run ycl.cli.login."
+                    f"likely expired; re-run `{LOGIN_COMMAND}`."
                 ) from exc
             raise YclApiError(
                 f"GET {url} returned a non-JSON body: {resp.text[:200]!r}"
@@ -399,7 +404,7 @@ class YclClient:
     def _check(method: str, url: str, resp: httpx.Response) -> httpx.Response:
         if resp.status_code in (401, 403):
             raise AuthExpiredError(
-                f"{method} {url} returned {resp.status_code}; re-run ycl.cli.login."
+                f"{method} {url} returned {resp.status_code}; re-run `{LOGIN_COMMAND}`."
             )
         # The unauth bounce: server says 200 but we landed on a marketing/login
         # page. The authoritative signal is "expected JSON, got HTML" (handled

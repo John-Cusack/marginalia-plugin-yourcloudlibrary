@@ -91,15 +91,18 @@ The XHTML is well-formed (Innodata-generated); Python's stdlib
 ## Auth flow — one-time browser, headless thereafter
 
 1. **First-time login** is unavoidable in a browser because each library
-   uses its own auth (card+PIN, SSO, library-card-only, etc.). The CLI at
-   `ycl/cli/login.py` opens Chromium at `https://www.yourcloudlibrary.com/`
-   and polls every 3 s for the YCL session cookies (`__session_PROD` +
-   `__config_PROD`) to appear. Once they do, it saves them and exits.
-2. **All subsequent operations** are plain async httpx using the saved
-   cookies. There's no second browser launch.
+   uses its own auth (card+PIN, SSO, library-card-only, etc.). The
+   `research-engine-ycl-login` command (`ycl/cli/login.py`) opens Chromium at
+   `https://www.yourcloudlibrary.com/` — or, when the library is known, at its
+   catalog page `ebook…/library/{urlName}/featured`, which on 2026-06-30 set
+   both cookies more reliably — and polls every 3 s for the YCL session cookies
+   (`__session_PROD` + `__config_PROD`). Once they do, it saves them and exits.
+2. **Scraping, loans, borrow/return** are plain async httpx using the saved
+   cookies. Catalog search is the exception (see "Catalog search" below): it
+   needs a warmed headless browser context.
 3. **When cookies expire** (401, or a 200 that bounced to marketing), the
    client raises `AuthExpiredError` with a hint to re-run the login CLI.
-   `ycl.auth_status` reports the same state proactively.
+   `yourcloudlibrary.auth_status` reports the same state proactively.
 
 ## Performance
 
@@ -115,7 +118,7 @@ book. The API-only path is ~300x faster.
 
 ## Active-loans endpoint (added 2026-06-29)
 
-Live findings that drove `ycl.sync_loans` and `YclClient.get_loans`. Probed
+Live findings that drove `yourcloudlibrary.sync_loans` and `YclClient.get_loans`. Probed
 by injecting the saved session cookies into a real browser and watching the
 My-Books page traffic (the loan list is fetched client-side after hydration,
 not server-rendered, so it doesn't appear in the initial HTML).

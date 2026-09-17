@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import tempfile
 from pathlib import Path
 
 import structlog
@@ -31,11 +34,27 @@ class CookieStore:
             return []
 
     def save(self, cookies: list[dict]) -> None:
+        """Write atomically, readable only by the owner.
+
+        The file is a live library session. It is created 0600 from the first
+        byte (never written world-readable and then chmod-ed), and swapped in
+        with ``os.replace`` so a crash can't leave a truncated session behind.
+        """
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps(cookies, indent=2, default=str),
-            encoding="utf-8",
+        fd, tmp = tempfile.mkstemp(
+            dir=str(self.path.parent), prefix=".cookies-", suffix=".json.tmp"
         )
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(cookies, fh, indent=2, default=str)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self.path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
         log.debug("cookies_saved", count=len(cookies), path=str(self.path))
 
     def clear(self) -> None:

@@ -1,7 +1,7 @@
-"""Tests for the ycl.sync_loans tool handler.
+"""Tests for the yourcloudlibrary.sync_loans tool handler.
 
 The handler is exercised with a fake YclClient (no cookies, no network) and a
-BorrowStore pointed at a tmp file, so we can assert that real ``dueDate``
+PluginContext whose data directory is a temp dir, so we can assert that real ``dueDate``
 values land in the store with the estimated flag cleared.
 """
 
@@ -13,7 +13,7 @@ import ycl.tools.sync_loans as mod
 from ycl.api.errors import AuthExpiredError, NotAuthenticatedError
 from ycl.api.types import Loan
 from ycl.borrows import BorrowStore
-from ycl.tools.sync_loans import _normalize_due_date, handler
+from ycl.tools.sync_loans import _normalize_due_date
 
 LIBRARY_KEY = "PalmBeachCountyLibrarySystem"
 
@@ -46,10 +46,18 @@ class _FakeClient:
 
 
 @pytest.fixture
-def store(tmp_path, monkeypatch):
-    s = BorrowStore(tmp_path / "borrows.json")
-    monkeypatch.setattr(mod, "BorrowStore", lambda: s)
-    return s
+def store(plugin_paths):
+    return BorrowStore(plugin_paths.borrows_path)
+
+
+@pytest.fixture
+def handler(plugin_context):
+    """The tool handler bound to a temp-dir PluginContext."""
+
+    async def call(**kwargs):
+        return await mod.handler(context=plugin_context, **kwargs)
+
+    return call
 
 
 def _install_client(monkeypatch, client):
@@ -58,7 +66,7 @@ def _install_client(monkeypatch, client):
     )
 
 
-async def test_sync_loans_writes_real_expiry_and_clears_estimate(store, monkeypatch):
+async def test_sync_loans_writes_real_expiry_and_clears_estimate(store, handler, monkeypatch):
     loans = [
         Loan(
             item_id="onc5689",
@@ -88,7 +96,7 @@ async def test_sync_loans_writes_real_expiry_and_clears_estimate(store, monkeypa
     assert record["loan_id"] == "loan-1"
 
 
-async def test_sync_loans_overwrites_a_prior_estimate(store, monkeypatch):
+async def test_sync_loans_overwrites_a_prior_estimate(store, handler, monkeypatch):
     # Seed an estimated record, as record_borrow/ingest would have left it.
     store.upsert(
         library_id=LIBRARY_KEY,
@@ -107,7 +115,7 @@ async def test_sync_loans_overwrites_a_prior_estimate(store, monkeypatch):
     assert record["expires_at_is_estimated"] is False
 
 
-async def test_sync_loans_handles_unparseable_due_date(store, monkeypatch):
+async def test_sync_loans_handles_unparseable_due_date(store, handler, monkeypatch):
     loans = [Loan(item_id="onc1", title="Mystery", due_date="not-a-date")]
     _install_client(monkeypatch, _FakeClient(loans))
 
@@ -127,7 +135,7 @@ async def test_sync_loans_handles_unparseable_due_date(store, monkeypatch):
     assert store.is_active(LIBRARY_KEY, "onc1") is True
 
 
-async def test_sync_loans_skips_items_without_id(store, monkeypatch):
+async def test_sync_loans_skips_items_without_id(store, handler, monkeypatch):
     loans = [
         Loan(item_id="", title="ghost", due_date="2099-01-01T00:00:00Z"),
         Loan(item_id="onc2", title="real", due_date="2099-01-01T00:00:00Z"),
@@ -140,7 +148,7 @@ async def test_sync_loans_skips_items_without_id(store, monkeypatch):
     assert result["loans"][0]["book_id"] == "onc2"
 
 
-async def test_sync_loans_does_not_clobber_real_title_with_untitled(store, monkeypatch):
+async def test_sync_loans_does_not_clobber_real_title_with_untitled(store, handler, monkeypatch):
     # A prior ingest recorded the correct title.
     store.upsert(library_id=LIBRARY_KEY, book_id="onc5689", title="Real Title")
     # The loans payload omitted a title, so _loan_from_item defaulted it.
@@ -152,7 +160,7 @@ async def test_sync_loans_does_not_clobber_real_title_with_untitled(store, monke
     assert store.get(LIBRARY_KEY, "onc5689")["title"] == "Real Title"
 
 
-async def test_sync_loans_reconciles_returned_loan(store, monkeypatch):
+async def test_sync_loans_reconciles_returned_loan(store, handler, monkeypatch):
     # A previously-synced loan (has a loan_id) with a still-future expiry.
     store.upsert(
         library_id=LIBRARY_KEY,
@@ -188,7 +196,7 @@ async def test_sync_loans_reconciles_returned_loan(store, monkeypatch):
     assert store.is_active(LIBRARY_KEY, "onc_manual") is True
 
 
-async def test_sync_loans_reborrow_clears_returned_flag(store, monkeypatch):
+async def test_sync_loans_reborrow_clears_returned_flag(store, handler, monkeypatch):
     store.upsert(
         library_id=LIBRARY_KEY,
         book_id="onc5689",
@@ -210,7 +218,7 @@ async def test_sync_loans_reborrow_clears_returned_flag(store, monkeypatch):
     assert store.is_active(LIBRARY_KEY, "onc5689") is True
 
 
-async def test_sync_loans_not_authenticated(monkeypatch):
+async def test_sync_loans_not_authenticated(handler, monkeypatch):
     def _raise(*_a, **_k):
         raise NotAuthenticatedError("no cookies")
 
@@ -221,7 +229,7 @@ async def test_sync_loans_not_authenticated(monkeypatch):
     assert result["error_type"] == "not_authenticated"
 
 
-async def test_sync_loans_auth_expired(store, monkeypatch):
+async def test_sync_loans_auth_expired(store, handler, monkeypatch):
     _install_client(monkeypatch, _FakeClient(error=AuthExpiredError("expired")))
 
     result = await handler()

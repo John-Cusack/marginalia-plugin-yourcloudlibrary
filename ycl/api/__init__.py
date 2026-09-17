@@ -1,7 +1,7 @@
 """Cookie-authenticated httpx client for the YCL backend.
 
 This package replaces the Playwright-based reader scraper. Authentication
-still requires a one-time browser login (via ``ycl.cli.login``), but every
+still requires a browser login (``research-engine-ycl-login``), but every
 subsequent operation is plain async httpx — no headless browser, no
 page-turn loop.
 

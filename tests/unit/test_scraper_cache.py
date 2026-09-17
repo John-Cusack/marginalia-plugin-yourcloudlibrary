@@ -1,7 +1,6 @@
 """Scraper chapter helpers + on-disk chapter-structure cache sidecar.
 
-Both layers are pure ycl.api / ycl._textcache code (no research_engine), so
-they run in the standalone unit-test venv.
+Both layers are pure ycl.api / ycl._textcache code with no SDK dependency.
 """
 
 from __future__ import annotations
@@ -38,31 +37,23 @@ def test_specs_roundtrip_reconstructs_chapters_exactly():
         assert got.text == original.text  # slices align across the separator
 
 
-def test_write_then_read_sidecar_roundtrip(tmp_path, monkeypatch):
-    # Redirect the extracted-text dir into tmp_path.
-    import ycl._paths as paths
-
-    monkeypatch.setattr(paths, "EXTRACTED_DIR", tmp_path / "extracted")
-
+def test_write_then_read_sidecar_roundtrip(plugin_paths):
     chapters = _chapters()
     result = ScrapeResult(
         book_id="onc5689", isbn="9780310522744", title="The Real Title", chapters=chapters
     )
-    write_text_cache("lib", "onc5689", result)
+    write_text_cache(plugin_paths, "lib", "onc5689", result)
 
-    text = paths.text_path_for("lib", "onc5689").read_text(encoding="utf-8")
+    text = plugin_paths.text_path_for("lib", "onc5689").read_text(encoding="utf-8")
     assert text == result.text
 
-    title, rebuilt = read_chapter_sidecar("lib", "onc5689", text)
+    title, rebuilt = read_chapter_sidecar(plugin_paths, "lib", "onc5689", text)
     assert title == "The Real Title"
     assert [c.title for c in rebuilt] == [None, "Chapter One", "Chapter Two"]
     assert [c.text for c in rebuilt] == [c.text for c in chapters]
 
 
-def test_read_sidecar_absent_returns_empty(tmp_path, monkeypatch):
-    import ycl._paths as paths
-
-    monkeypatch.setattr(paths, "EXTRACTED_DIR", tmp_path / "extracted")
-    title, chapters = read_chapter_sidecar("lib", "missing", "some text")
+def test_read_sidecar_absent_returns_empty(plugin_paths):
+    title, chapters = read_chapter_sidecar(plugin_paths, "lib", "missing", "some text")
     assert title is None
     assert chapters == []

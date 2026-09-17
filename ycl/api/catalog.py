@@ -11,7 +11,7 @@ URL, params, cookies, and browser headers — comes back empty. Loading any cata
 page first establishes the session state the loader requires. So ``CatalogSearcher``
 holds one persistent Playwright context, loads ``/featured`` once, and then issues
 cheap ``ctx.request`` GETs per query (no per-search page render). See
-``docs/design/source-search-live-providers.md`` §10 for the full reverse-engineering.
+``IMPL_NOTES.md`` ("Catalog search") for the measurements.
 
 The id that matters: each result's ``documentId`` is the detail/borrow/ingest
 ``book_id``. The other ids (``id``/``bibliographicIdentifier``/``catalogItemId``)
@@ -28,10 +28,15 @@ from urllib.parse import urlencode
 
 import structlog
 
-from .._paths import COOKIE_PATH
 from ..session.cookies import CookieStore
 from .cookies import decode_config_cookie
-from .errors import NotAuthenticatedError
+from .errors import (
+    LOGIN_COMMAND,
+    PLAYWRIGHT_INSTALL_COMMAND,
+    BrowserUnavailableError,
+    NotAuthenticatedError,
+    browser_launch_error,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -138,7 +143,7 @@ class CatalogSearcher:
     serialize or pool.
     """
 
-    def __init__(self, *, cookie_path: Path = COOKIE_PATH, headless: bool = True) -> None:
+    def __init__(self, *, cookie_path: Path, headless: bool = True) -> None:
         self._cookie_path = cookie_path
         self._headless = headless
         self._library_slug: str | None = None
@@ -188,13 +193,18 @@ class CatalogSearcher:
             cookies = CookieStore(self._cookie_path).load()
             if not cookies:
                 raise NotAuthenticatedError(
-                    f"No cookie file at {self._cookie_path}. Run `python -m ycl.cli.login` once."
+                    f"No cookie file at {self._cookie_path}. Run `{LOGIN_COMMAND}` once."
                 )
             self._library_slug = decode_config_cookie(cookies).url_name
             if not self._library_slug:
                 raise NotAuthenticatedError("library url_name missing — cookie malformed")
 
-            from playwright.async_api import async_playwright
+            try:
+                from playwright.async_api import async_playwright
+            except ImportError as exc:
+                raise BrowserUnavailableError(
+                    "Playwright is not installed.", hint=PLAYWRIGHT_INSTALL_COMMAND
+                ) from exc
 
             # BaseException (incl. asyncio.CancelledError, if a caller ever awaits
             # this under a timeout) must not leave a half-built browser orphaned.
@@ -213,8 +223,11 @@ class CatalogSearcher:
                     timeout=45000,
                 )
                 await page.close()
-            except BaseException:
+            except BaseException as exc:
                 await self.close()  # tear down partials, reset _warm
+                missing = browser_launch_error(exc)
+                if missing is not None:
+                    raise missing from exc
                 raise
             self._warm = True
             log.debug("catalog_searcher_warm", library=self._library_slug)
@@ -233,7 +246,7 @@ class CatalogSearcher:
             # tell the user to re-login) rather than masking it as "no results".
             raise NotAuthenticatedError(
                 f"catalog search returned {resp.status} — session may be invalid; "
-                "re-run `python -m ycl.cli.login`."
+                f"re-run `{LOGIN_COMMAND}`."
             )
         if not resp.ok:
             log.warning("catalog_search_http", status=resp.status, query=query)
@@ -269,10 +282,12 @@ class CatalogSearcher:
             self._warm = False
 
 
-async def search_catalog(query: str, *, limit: int = 20, available_only: bool = False) -> list[CatalogItem]:
+async def search_catalog(
+    query: str, *, cookie_path: Path, limit: int = 20, available_only: bool = False
+) -> list[CatalogItem]:
     """One-shot convenience: warm a context, search, tear down. For a single
     query. Use a long-lived :class:`CatalogSearcher` for repeated searches."""
-    searcher = CatalogSearcher()
+    searcher = CatalogSearcher(cookie_path=cookie_path)
     try:
         return await searcher.search(query, limit=limit, available_only=available_only)
     finally:

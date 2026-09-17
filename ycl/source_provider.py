@@ -8,10 +8,10 @@ each one. Read-only: each match carries an ``ingest_action`` descriptor; nothing
 is borrowed here.
 
 Self-contained auth: like the rest of the plugin, the provider reads the saved
-session from disk (``~/.marginalia/plugins/yourcloudlibrary/cookies.json``) — it
-needs no clients injected by the host.
+session from the plugin data directory (``PluginContext.data_dir``, or core's
+default when constructed without a context). It needs no injected clients.
 
-Availability mapping (see docs/design/source-search-live-providers.md §10.2):
+Availability mapping:
   available copy now            -> borrowable
   owned but 0 copies free       -> borrowable + metadata.hold_required
   pay-per-use only              -> purchasable
@@ -20,26 +20,21 @@ Availability mapping (see docs/design/source-search-live-providers.md §10.2):
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import structlog
+from research_engine_sdk import Availability, IngestAction, SourceMatch
 
-# Import from the canonical domain module (the SDK aggregate re-exports these);
-# the domain module is pydantic-only and avoids pulling the full SDK surface.
-from research_engine.domain.source_search import (
-    Availability,
-    IngestAction,
-    SourceMatch,
-    SourceQuery,
-)
-
-from ._paths import COOKIE_PATH
+from ._paths import PLUGIN_ID, resolve_paths
 from .api.catalog import CatalogItem, CatalogSearcher
 from .api.cookies import decode_config_cookie, reading_session_status
-from .api.errors import NotAuthenticatedError
+from .api.errors import LOGIN_COMMAND, NotAuthenticatedError
 from .session.cookies import CookieStore
 
-log = structlog.get_logger(__name__)
+if TYPE_CHECKING:
+    from research_engine_sdk import PluginContext, SourceQuery
 
-PLUGIN_NAME = "yourcloudlibrary"
+log = structlog.get_logger(__name__)
 
 
 def _availability(item: CatalogItem) -> tuple[Availability, dict]:
@@ -76,18 +71,18 @@ def item_to_match(item: CatalogItem, *, max_score: float) -> SourceMatch:
         "language": item.language,
         "summary": item.summary[:500],
         "image": item.image,
-        # Lets core mark in_corpus via IngestionOrchestrator.find_existing.
+        # Lets core mark in_corpus via IngestionClient.find_existing.
         "corpus_source_pattern": item.document_id,
         **extra,
     }
     # Discovery stays read-only; acquisition (borrow -> scrape -> ingest -> return)
     # is a separate explicit action keyed on the borrow/ingest documentId.
     ingest_action = IngestAction(
-        tool="ycl.acquire_and_ingest",
+        tool="yourcloudlibrary.acquire_and_ingest",
         args={"book_id": item.document_id},
     )
     return SourceMatch(
-        plugin=PLUGIN_NAME,
+        plugin=PLUGIN_ID,
         source_id=item.document_id,
         title=item.title,
         authors=item.authors,
@@ -102,12 +97,13 @@ def item_to_match(item: CatalogItem, *, max_score: float) -> SourceMatch:
 class YclSourceProvider:
     """SourceSearchProvider implementation for YourCloudLibrary (discovery)."""
 
-    plugin_name = PLUGIN_NAME
+    plugin_name = PLUGIN_ID
 
-    def __init__(self) -> None:
+    def __init__(self, context: PluginContext | None = None) -> None:
+        self._cookie_path = resolve_paths(context).cookie_path
         # The provider owns its searcher for its lifetime (single owner — the
         # search_catalog tool keeps its own; no cross-ownership teardown hazard).
-        self._searcher = CatalogSearcher()
+        self._searcher = CatalogSearcher(cookie_path=self._cookie_path)
 
     async def search(self, query: SourceQuery, *, limit: int) -> list[SourceMatch]:
         # The host runs each provider under an 8s wait_for; a cold browser warm
@@ -127,8 +123,7 @@ class YclSourceProvider:
         try:
             items = await self._searcher.search(terms, limit=limit)
         except NotAuthenticatedError:
-            # Surfaced as unauthenticated by the host once healthcheck lands; for
-            # now, return empty rather than poisoning the fan-out.
+            # Reported through healthcheck(); never poison the fan-out.
             log.warning("ycl_source_search_unauthenticated")
             return []
         except Exception as e:  # never poison the fan-out
@@ -140,11 +135,11 @@ class YclSourceProvider:
         return [item_to_match(it, max_score=max_score) for it in items]
 
     async def healthcheck(self) -> dict:
-        """Optional provider-owned status probe (presence-only — YCL has no cheap
-        live auth check). Maps to the host's ProviderStatus once §3.3 lands."""
-        cookies = CookieStore(COOKIE_PATH).load()
+        """Provider-owned status probe (presence and expiry only — YCL has no
+        cheap live auth check)."""
+        cookies = CookieStore(self._cookie_path).load()
         if not cookies:
-            return {"status": "unconfigured", "detail": "Run `python -m ycl.cli.login`."}
+            return {"status": "unconfigured", "detail": f"Run `{LOGIN_COMMAND}`."}
         try:
             info = decode_config_cookie(cookies)
         except NotAuthenticatedError as e:

@@ -30,11 +30,12 @@ from __future__ import annotations
 import asyncio
 import json
 
+from ycl._paths import resolve_paths
 from ycl.api.client import YclClient
 
 
 async def main() -> None:
-    client = YclClient.from_cookie_store()
+    client = YclClient.from_cookie_store(resolve_paths().cookie_path)
     try:
         loans = await client.get_loans()
     finally:

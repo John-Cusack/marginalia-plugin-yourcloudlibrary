@@ -1,0 +1,92 @@
+name: Release
+
+# Protect `v*` tags in the repository settings so only maintainers can trigger this.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build and verify artifacts
+    runs-on: ubuntu-latest
+    env:
+      YCL_TEST_REQUIRE_REAL_SDK: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+
+      - name: Tag, package version, and changelog agree
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
+          test "v${version}" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != v${version}"; exit 1; }
+          grep -q "^## ${version} " CHANGELOG.md || { echo "CHANGELOG.md has no ${version} section"; exit 1; }
+          if grep -q "^## ${version} — unreleased" CHANGELOG.md; then
+            echo "CHANGELOG.md still marks ${version} unreleased"; exit 1
+          fi
+
+      - run: uv sync --extra dev
+      - run: uv run ruff check ycl tests
+      - run: uv run pytest -q    # unit + contract, including wheel/sdist inspection
+
+      - run: uv build
+      - run: uvx --from twine twine check --strict dist/*
+
+      - name: Clean-venv smoke (no checkout on the path)
+        run: |
+          python3 -m venv /tmp/ycl-release-smoke
+          /tmp/ycl-release-smoke/bin/python -m pip install --upgrade pip
+          /tmp/ycl-release-smoke/bin/python -m pip install "research-engine==0.6.0" dist/*.whl
+          cd /tmp
+          /tmp/ycl-release-smoke/bin/research-engine plugin list | tee plugin-list.txt
+          grep -q yourcloudlibrary plugin-list.txt
+          /tmp/ycl-release-smoke/bin/research-engine-ycl-login --help
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/research-engine-plugin-yourcloudlibrary/
+    permissions:
+      id-token: write   # Trusted Publishing; no API token exists for this project
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      # v1.14.2. PEP 740 attestations are on by default; never add skip-existing.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+
+  verify:
+    name: smoke the published release from PyPI
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install from production PyPI and discover
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python -m venv /tmp/ycl-pypi-smoke
+          /tmp/ycl-pypi-smoke/bin/python -m pip install --upgrade pip
+          for attempt in 1 2 3 4 5 6; do
+            /tmp/ycl-pypi-smoke/bin/python -m pip install --no-cache-dir \
+              "research-engine==0.6.0" "research-engine-plugin-yourcloudlibrary==${version}" && break
+            sleep 30
+          done
+          /tmp/ycl-pypi-smoke/bin/research-engine plugin list | tee plugin-list.txt
+          grep -q yourcloudlibrary plugin-list.txt
+          /tmp/ycl-pypi-smoke/bin/research-engine-ycl-login --help

@@ -1,10 +1,12 @@
-"""ycl.check_book — report borrow + disk + corpus status for a book."""
+"""yourcloudlibrary.check_book — report borrow + disk + corpus status for a book."""
 
 from __future__ import annotations
 
-from research_engine.plugins.sdk import tool
+from typing import TYPE_CHECKING
 
-from .._paths import text_path_for
+from research_engine_sdk import tool
+
+from .._paths import resolve_paths
 from .._time import utcnow
 from ..api import (
     AuthExpiredError,
@@ -14,9 +16,12 @@ from ..api import (
 )
 from ..borrows import BorrowStore
 
+if TYPE_CHECKING:
+    from research_engine_sdk import PluginContext
+
 
 @tool(
-    id="ycl.check_book",
+    id="yourcloudlibrary.check_book",
     description=(
         "Check borrow status, expiration, scrape state, and ingestion state for "
         "a single book. Combines (a) the live YCL detail-page API to verify "
@@ -43,9 +48,11 @@ async def handler(
     book_id: str,
     live: bool = True,
     ingestion=None,
+    context: PluginContext | None = None,
     **_clients,
 ) -> dict:
-    store = BorrowStore()
+    paths = resolve_paths(context)
+    store = BorrowStore(paths.borrows_path)
     now = utcnow()
 
     library_key = "unknown"
@@ -55,7 +62,7 @@ async def handler(
 
     if live:
         try:
-            client = YclClient.from_cookie_store()
+            client = YclClient.from_cookie_store(paths.cookie_path)
             library_key = client.library.url_name or library_key
             library_name = client.library.name
             try:
@@ -87,7 +94,7 @@ async def handler(
 
     record = store.get(library_key, book_id)
 
-    text_path = text_path_for(library_key, book_id)
+    text_path = paths.text_path_for(library_key, book_id)
     on_disk = text_path.exists()
     disk_info: dict | None = None
     if on_disk:
