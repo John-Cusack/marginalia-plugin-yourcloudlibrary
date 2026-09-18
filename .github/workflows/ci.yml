@@ -20,8 +20,8 @@ jobs:
       # Fail rather than fall back to tests/_sdk_standin: CI proves the real SDK.
       YCL_TEST_REQUIRE_REAL_SDK: "1"
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: ${{ matrix.python }}
       - run: uv sync --extra dev
@@ -46,8 +46,8 @@ jobs:
     env:
       RE_DB_URL: postgresql+asyncpg://re_test:re_test@localhost:5432/re_test
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: "3.12"
       - run: uv build
