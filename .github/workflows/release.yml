@@ -57,8 +57,7 @@ jobs:
           /tmp/ycl-release-smoke/bin/python -m pip install --upgrade pip
           /tmp/ycl-release-smoke/bin/python -m pip install "marginalia-ai==0.6.0" dist/*.whl
           cd /tmp
-          /tmp/ycl-release-smoke/bin/research-engine plugin list | tee plugin-list.txt
-          grep -q yourcloudlibrary plugin-list.txt
+          /tmp/ycl-release-smoke/bin/python -c "from research_engine.plugins.discovery import discover_plugins; assert 'yourcloudlibrary' in [p.plugin_id for p in discover_plugins()]"
           /tmp/ycl-release-smoke/bin/research-engine-ycl-login --help
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -103,6 +102,5 @@ jobs:
               "marginalia-ai-plugin-yourcloudlibrary==${version}" && break
             sleep 30
           done
-          /tmp/ycl-pypi-smoke/bin/research-engine plugin list | tee plugin-list.txt
-          grep -q yourcloudlibrary plugin-list.txt
+          /tmp/ycl-pypi-smoke/bin/python -c "from research_engine.plugins.discovery import discover_plugins; assert 'yourcloudlibrary' in [p.plugin_id for p in discover_plugins()]"
           /tmp/ycl-pypi-smoke/bin/research-engine-ycl-login --help
