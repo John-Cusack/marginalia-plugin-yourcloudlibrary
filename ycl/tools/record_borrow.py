@@ -1,19 +1,25 @@
-"""ycl.record_borrow — register a borrow without scraping."""
+"""yourcloudlibrary.record_borrow — register a borrow without scraping."""
 
 from __future__ import annotations
 
-from research_engine.plugins.sdk import tool
+from typing import TYPE_CHECKING
+
+from research_engine_sdk import tool
 
 from .._config import ConfigError
 from .._config import load as load_config
+from .._paths import resolve_paths
 from .._time import resolve_expires_at, to_iso, utcnow
 from ..borrows import BorrowStore
 from ._errors import err as _err
 from ._errors import load_library
 
+if TYPE_CHECKING:
+    from research_engine_sdk import PluginContext
+
 
 @tool(
-    id="ycl.record_borrow",
+    id="yourcloudlibrary.record_borrow",
     description=(
         "Register a YourCloudLibrary borrow with its expiration, without "
         "scraping. Useful for queueing books to scrape later, or for "
@@ -50,6 +56,7 @@ async def handler(
     title: str | None = None,
     expires_at: str | None = None,
     borrowed_at: str | None = None,
+    context: PluginContext | None = None,
     **_clients,
 ) -> dict:
     try:
@@ -57,12 +64,13 @@ async def handler(
     except ConfigError as exc:
         return _err("config", str(exc))
 
-    info, error = load_library(required=True)
+    paths = resolve_paths(context)
+    info, error = load_library(paths, required=True)
     if error:
         return error
 
     library_key = info.url_name or "unknown"
-    store = BorrowStore()
+    store = BorrowStore(paths.borrows_path)
     now = utcnow()
     resolved_expires_at, estimated = resolve_expires_at(
         explicit_expires_at=expires_at,

@@ -97,16 +97,6 @@ class Chapter:
 
 
 @dataclass(frozen=True)
-class SearchHit:
-    """One catalog-search result row."""
-
-    book_id: str            # opaque vendor id, e.g. "onc5689" — feeds scrape/ingest
-    title: str
-    author: str | None = None
-    available: bool | None = None   # True=borrowable now, False=hold-only, None=unknown
-
-
-@dataclass(frozen=True)
 class ScrapeResult:
     """Output of ``scrape_book``.
 

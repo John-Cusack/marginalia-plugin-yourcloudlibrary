@@ -1,47 +1,66 @@
-"""ycl.auth_status — report whether the plugin has valid YCL session cookies."""
+"""yourcloudlibrary.auth_status — report whether the plugin has valid YCL session cookies."""
 
 from __future__ import annotations
 
-from research_engine.plugins.sdk import tool
+from typing import TYPE_CHECKING
 
-from .._paths import COOKIE_PATH
+from research_engine_sdk import tool
+
+from .._paths import resolve_paths
 from .._time import utcnow
-from ..api.cookies import decode_config_cookie, session_expiry_status
+from ..api.cookies import (
+    decode_config_cookie,
+    reading_session_status,
+    session_expiry_status,
+)
 from ..api.errors import NotAuthenticatedError
 from ..session.cookies import CookieStore
+from ._errors import LOGIN_HINT
+
+if TYPE_CHECKING:
+    from research_engine_sdk import PluginContext
 
 
 @tool(
-    id="ycl.auth_status",
+    id="yourcloudlibrary.auth_status",
     description=(
         "Report whether the plugin has YCL session cookies on disk and what "
-        "library they're for. If unauthenticated, the message tells the user "
-        "to run `python -m ycl.cli.login`."
+        "library they're for, and whether the short-lived reading session can "
+        "still fetch book content. If unauthenticated, the hint names the "
+        "research-engine-ycl-login command."
     ),
     input_schema={"type": "object", "properties": {}},
 )
-async def handler(**_clients) -> dict:
-    store = CookieStore(COOKIE_PATH)
-    cookies = store.load()
+async def handler(context: PluginContext | None = None, **_clients) -> dict:
+    cookie_path = resolve_paths(context).cookie_path
+    cookies = CookieStore(cookie_path).load()
     if not cookies:
         return {
             "authenticated": False,
-            "cookie_path": str(COOKIE_PATH),
-            "hint": "Run `uv run python -m ycl.cli.login` to authenticate.",
+            "cookie_path": str(cookie_path),
+            "hint": LOGIN_HINT,
         }
     try:
         library = decode_config_cookie(cookies)
     except NotAuthenticatedError as exc:
         return {
             "authenticated": False,
-            "cookie_path": str(COOKIE_PATH),
+            "cookie_path": str(cookie_path),
             "warning": str(exc),
-            "hint": "Run `uv run python -m ycl.cli.login` to authenticate.",
+            "hint": LOGIN_HINT,
         }
     cookie_names = sorted({c["name"] for c in cookies})
+    reading = reading_session_status(cookies)
     return {
+        # Cookies present + decodable: catalog search/borrow should work.
         "authenticated": True,
-        "cookie_path": str(COOKIE_PATH),
+        # Reading/ingest needs an UNEXPIRED __session_PROD; epubservice enforces
+        # it strictly while the catalog is lenient. This is the signal that
+        # decides whether scrape/acquire_and_ingest will work.
+        "can_read": reading["ok"],
+        "reading_status": reading["reason"],
+        "reading_hint": None if reading["ok"] else reading["detail"],
+        "cookie_path": str(cookie_path),
         "cookie_count": len(cookies),
         "cookie_names": cookie_names,
         "library_name": library.name,

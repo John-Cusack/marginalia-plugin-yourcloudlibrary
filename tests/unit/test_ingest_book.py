@@ -1,31 +1,22 @@
-"""Tests for the ycl.ingest_book handler.
+"""yourcloudlibrary.ingest_book through the shared ingestion boundary (``ycl.tools._ingest``).
 
-Covers two areas merged from the P1 and P2 work, all against the stubbed
-research_engine SDK from tests/conftest.py (whose ProseWindowChunker yields
-passage-draft-like objects with .position/.metadata, faithful to the host):
-  * P1 — cache-path metadata (author/subjects/description) + authoritative
-    expiry preservation.
-  * P2 — chapter-aware chunking (P2.5) and the cached-title fix (P2.4).
+The fake ingestion client implements only the SDK surface the plugin may use —
+``find_existing`` and ``ingest_document`` — so any regression to plugin-side
+chunking (``ingest_drafts``) fails loudly. No network, no core.
 """
 
 from __future__ import annotations
 
 import pytest
 
-import ycl._paths as paths
+import ycl.tools._ingest as boundary
 import ycl.tools.ingest_book as mod
-from ycl.api.types import Chapter, ScrapeResult
+from ycl._paths import legacy_paths
+from ycl._textcache import write_text_cache
+from ycl.api.types import CHAPTER_SEPARATOR, Chapter, ScrapeResult
 from ycl.borrows import BorrowStore
 
 LIBRARY_KEY = "PalmBeachCountyLibrarySystem"
-
-from research_engine.services.ingestion.chunking.prose_window import (  # noqa: E402
-    ProseWindowChunker,
-)
-
-# Long enough that each chapter chunks into several passages, so the global
-# position renumbering across chapters is actually exercised.
-_LONG = "This is a sentence about libraries. " * 60
 
 
 class _FakeLibrary:
@@ -35,10 +26,6 @@ class _FakeLibrary:
 
 class _FakeClient:
     library = _FakeLibrary()
-
-    @classmethod
-    def from_cookie_store(cls, *_a, **_k):
-        return cls()
 
     async def __aenter__(self):
         return self
@@ -51,187 +38,248 @@ class _FakeClient:
 
 
 class _FakeIngestion:
-    def __init__(self):
-        self.metadata = None
-        self.ingested_title = None
-        self.drafts: list = []
+    """SDK IngestionClient double: records requests, remembers sources."""
 
-    async def find_existing(self, source=None, **_):
-        return []
+    def __init__(self, existing: dict[str, dict] | None = None):
+        self.requests: list[dict] = []
+        self.existing = dict(existing or {})
+        self.lookups: list[str] = []
 
-    async def ingest_drafts(self, *, title, document_type, passage_drafts, source, metadata):
-        self.ingested_title = title
-        self.drafts = passage_drafts
-        self.metadata = metadata
-        return {"document_id": "doc-1", "passage_count": len(passage_drafts)}
+    async def find_existing(self, *, source=None, source_pattern=None):
+        self.lookups.append(source)
+        doc = self.existing.get(source)
+        return [doc] if doc else []
+
+    async def ingest_document(
+        self, *, title, document_type, text, source="", metadata=None, language=None,
+        sections=None,
+    ):
+        self.requests.append(
+            {"title": title, "document_type": document_type, "text": text, "source": source,
+             "metadata": metadata, "sections": sections}
+        )
+        doc = {"document_id": f"doc-{len(self.requests)}", "passage_count": 3,
+               "title": title, "source": source}
+        self.existing[source] = doc
+        return {"document_id": doc["document_id"], "passage_count": 3}
+
+    @property
+    def last(self) -> dict:
+        return self.requests[-1]
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
-    """Redirect the extracted-text dir + store + client into tmp_path.
+def env(plugin_context, plugin_paths, monkeypatch):
+    monkeypatch.setattr(boundary, "acquire_client", lambda paths: (_FakeClient(), None))
+    store = BorrowStore(plugin_paths.borrows_path)
 
-    Patching ``_paths.EXTRACTED_DIR`` (read dynamically by ``text_path_for`` /
-    ``chapters_path_for``) redirects both the handler's cache and the chapter
-    sidecar in one shot.
-    """
-    monkeypatch.setattr(paths, "EXTRACTED_DIR", tmp_path / "extracted")
-    # The handler acquires its client via the shared acquire_client() helper.
-    monkeypatch.setattr(mod, "acquire_client", lambda: (_FakeClient(), None))
-    store = BorrowStore(path=tmp_path / "borrows.json")
-    monkeypatch.setattr(mod, "BorrowStore", lambda: store)
-
-    def _write_cached_text(book_id: str, body: str) -> None:
-        path = paths.text_path_for(LIBRARY_KEY, book_id)
+    def write_cached_text(book_id: str, body: str) -> None:
+        path = plugin_paths.text_path_for(LIBRARY_KEY, book_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")
 
-    return store, _write_cached_text
+    return plugin_context, plugin_paths, store, write_cached_text
 
 
-# --- P2.5: per-chapter chunking carries chapter location -------------------
-
-
-async def test_chunk_with_chapters_attaches_titles_and_renumbers():
-    chunker = ProseWindowChunker(max_tokens=80, overlap_tokens=10)
-    chapters = [
-        Chapter(index=0, href="OEBPS/c1.xhtml", title="Chapter One", text=_LONG),
-        Chapter(index=1, href="OEBPS/c2.xhtml", title="Chapter Two", text=_LONG),
+def _chapters() -> list[Chapter]:
+    return [
+        Chapter(index=0, href="OEBPS/cover.xhtml", title=None, text="Cover."),
+        Chapter(index=2, href="OEBPS/c1.xhtml", title="Chapter One", text="Body one. " * 40),
+        Chapter(index=3, href="OEBPS/c2.xhtml", title="Chapter Two", text="Body two. " * 40),
     ]
-    base_meta = {"book_id": "onc5689", "library_id": "lib"}
-
-    drafts = await mod._chunk_with_chapters(chunker, "ignored", chapters, base_meta)
-
-    assert len(drafts) > 2
-    assert [d.position for d in drafts] == list(range(len(drafts)))
-    titles = {d.metadata["chapter_title"] for d in drafts}
-    assert titles == {"Chapter One", "Chapter Two"}
-    assert all(d.metadata["book_id"] == "onc5689" for d in drafts)
-    first = next(d for d in drafts if d.metadata["chapter_title"] == "Chapter One")
-    assert first.metadata["chapter_index"] == 0
 
 
-async def test_chunk_with_chapters_falls_back_without_structure():
-    chunker = ProseWindowChunker()
-    drafts = await mod._chunk_with_chapters(chunker, _LONG, [], {"book_id": "onc5689"})
-
-    assert drafts  # whole-text path still produces passages
-    assert all("chapter_title" not in d.metadata for d in drafts)
+async def test_requires_ingestion_client(env):
+    context, *_ = env
+    result = await mod.handler(book_id="onc5689", context=context)
+    assert result["error_type"] == "config"
 
 
-# --- P2.4: cached re-ingest uses the BorrowStore title, not text sniffing --
+async def test_fresh_scrape_sends_canonical_text_and_chapter_sections(env, monkeypatch):
+    context, paths, store, _ = env
+    scraped = ScrapeResult(
+        book_id="onc5689", isbn="9780310522744", title="Four Views", chapters=_chapters(),
+        author="Doe, Jane", subjects=["Ecclesiology"],
+    )
+
+    async def fake_scrape(client, book_id, concurrency=4):
+        return scraped
+
+    monkeypatch.setattr(boundary, "api_scrape_book", fake_scrape)
+    ingestion = _FakeIngestion()
+
+    result = await mod.handler(book_id="onc5689", ingestion=ingestion, context=context)
+
+    assert result["status"] == "ingested"
+    request = ingestion.last
+    assert request["document_type"] == "ycl_book"
+    assert request["text"] == scraped.text
+    assert request["source"] == str(paths.text_path_for(LIBRARY_KEY, "onc5689").resolve())
+    # One node per chapter, each span addressing exactly that chapter's prose.
+    sections = request["sections"]
+    assert [s["heading"] for s in sections] == [None, "Chapter One", "Chapter Two"]
+    assert [s["chapter_index"] for s in sections] == [0, 2, 3]
+    for section, chapter in zip(sections, scraped.chapters, strict=True):
+        assert request["text"][section["char_start"] : section["char_end"]] == chapter.text
+    # Cache and registry written under the context's data directory.
+    assert paths.text_path_for(LIBRARY_KEY, "onc5689").read_text() == scraped.text
+    assert store.get(LIBRARY_KEY, "onc5689")["document_id"] == "doc-1"
+
+
+async def test_metadata_is_document_level_and_complete(env, monkeypatch):
+    context, _, _, write_cached_text = env
+    write_cached_text("onc5689", "Some text.")
+    ingestion = _FakeIngestion()
+
+    await mod.handler(book_id="onc5689", ingestion=ingestion, context=context)
+
+    assert set(ingestion.last["metadata"]) == {
+        "library_id", "library_name", "book_id", "ycl_title", "author", "subjects",
+        "description", "isbn", "borrowed_at", "expires_at", "expires_at_is_estimated",
+        "scraped_at", "char_count", "chapter_count", "partial_scrape", "source_url",
+    }
+    assert ingestion.last["metadata"]["source_url"] == (
+        "https://epub.yourcloudlibrary.com/read/onc5689"
+    )
+    assert ingestion.last["sections"] is None  # no sidecar → flat document
+
+
+async def test_repeat_returns_existing_document(env):
+    context, _, _, write_cached_text = env
+    write_cached_text("onc5689", "Some text.")
+    ingestion = _FakeIngestion()
+
+    first = await mod.handler(book_id="onc5689", ingestion=ingestion, context=context)
+    second = await mod.handler(book_id="onc5689", ingestion=ingestion, context=context)
+
+    assert first["status"] == "ingested"
+    assert second["status"] == "already_ingested"
+    assert second["document_id"] == first["document_id"]
+    assert len(ingestion.requests) == 1
+
+
+async def test_book_ingested_under_legacy_path_is_not_duplicated(env):
+    context, _, _, write_cached_text = env
+    write_cached_text("onc5689", "Some text.")
+    legacy_source = str(legacy_paths().text_path_for(LIBRARY_KEY, "onc5689").resolve())
+    ingestion = _FakeIngestion(
+        {legacy_source: {"document_id": "old-doc", "title": "T", "source": legacy_source}}
+    )
+
+    result = await mod.handler(book_id="onc5689", ingestion=ingestion, context=context)
+
+    assert result["status"] == "already_ingested"
+    assert result["document_id"] == "old-doc"
+    assert ingestion.requests == []
+
+
+async def test_force_reingest_skips_lookup(env):
+    context, _, _, write_cached_text = env
+    write_cached_text("onc5689", "Some text.")
+    ingestion = _FakeIngestion()
+    await mod.handler(book_id="onc5689", ingestion=ingestion, context=context)
+
+    result = await mod.handler(
+        book_id="onc5689", force_reingest=True, ingestion=ingestion, context=context
+    )
+    assert result["status"] == "ingested"
+    assert len(ingestion.requests) == 2
+
+
+# --- cached re-ingest (P2.4) ------------------------------------------------
 
 
 async def test_cached_ingest_reads_title_from_borrowstore(env):
-    store, write_cached_text = env
-    book_id = "onc5689"
-    # Cached text whose first line is cover junk — the old code would have
-    # used "COVER IMAGE" as the title.
-    write_cached_text(book_id, "COVER IMAGE\n\nReal opening sentence of the book.")
+    context, _, store, write_cached_text = env
+    # Cached text whose first line is cover junk — never used as the title.
+    write_cached_text("onc5689", "COVER IMAGE\n\nReal opening sentence of the book.")
     store.upsert(
-        library_id=LIBRARY_KEY,
-        book_id=book_id,
-        title="The Real Recorded Title",
-        isbn="9780310522744",
-        chapter_count=12,
+        library_id=LIBRARY_KEY, book_id="onc5689", title="The Real Recorded Title",
+        isbn="9780310522744", chapter_count=12,
     )
+    ingestion = _FakeIngestion()
 
-    fake_ingestion = _FakeIngestion()
-    result = await mod.handler(book_id=book_id, ingestion=fake_ingestion)
+    result = await mod.handler(book_id="onc5689", ingestion=ingestion, context=context)
 
-    assert result["status"] == "ingested"
     assert result["title"] == "The Real Recorded Title"
-    assert fake_ingestion.ingested_title == "The Real Recorded Title"
-    assert "COVER IMAGE" not in result["title"]
+    assert ingestion.last["title"] == "The Real Recorded Title"
 
 
 async def test_cached_ingest_explicit_title_overrides_store(env):
-    store, write_cached_text = env
-    book_id = "onc5689"
-    write_cached_text(book_id, "COVER IMAGE\n\nBody text.")
-    store.upsert(library_id=LIBRARY_KEY, book_id=book_id, title="Stored Title")
+    context, _, store, write_cached_text = env
+    write_cached_text("onc5689", "COVER IMAGE\n\nBody text.")
+    store.upsert(library_id=LIBRARY_KEY, book_id="onc5689", title="Stored Title")
 
     result = await mod.handler(
-        book_id=book_id, title="Caller Override", ingestion=_FakeIngestion()
+        book_id="onc5689", title="Caller Override", ingestion=_FakeIngestion(), context=context
     )
     assert result["title"] == "Caller Override"
 
 
-async def test_cached_ingest_recovers_chapters_and_title_from_sidecar(env):
-    """A prior scrape wrote text + chapter sidecar; re-ingesting from cache must
-    rebuild chapter metadata and recover the title even when BorrowStore has no
-    recorded title."""
-    from ycl._textcache import write_text_cache
-
-    store, _ = env
-    book_id = "onc5689"
-    chapters = [
-        Chapter(index=0, href="OEBPS/c1.xhtml", title="Chapter One", text="Body one. " * 40),
-        Chapter(index=1, href="OEBPS/c2.xhtml", title="Chapter Two", text="Body two. " * 40),
-    ]
-    write_text_cache(
-        LIBRARY_KEY,
-        book_id,
-        ScrapeResult(
-            book_id=book_id, isbn="9780310522744", title="Real Book Title", chapters=chapters
-        ),
+async def test_cached_ingest_recovers_chapter_sections_and_title_from_sidecar(env):
+    context, paths, store, _ = env
+    chapters = _chapters()
+    scraped = ScrapeResult(
+        book_id="onc5689", isbn="9780310522744", title="Real Book Title", chapters=chapters
     )
-    # BorrowStore record exists but has NO title.
-    store.upsert(library_id=LIBRARY_KEY, book_id=book_id)
+    write_text_cache(paths, LIBRARY_KEY, "onc5689", scraped)
+    store.upsert(library_id=LIBRARY_KEY, book_id="onc5689")  # no recorded title
+    ingestion = _FakeIngestion()
 
-    fake_ingestion = _FakeIngestion()
-    result = await mod.handler(book_id=book_id, ingestion=fake_ingestion)
+    result = await mod.handler(book_id="onc5689", ingestion=ingestion, context=context)
 
-    assert result["title"] == "Real Book Title"  # recovered from sidecar
-    chapter_titles = {d.metadata.get("chapter_title") for d in fake_ingestion.drafts}
-    assert chapter_titles == {"Chapter One", "Chapter Two"}
-    assert [d.position for d in fake_ingestion.drafts] == list(
-        range(len(fake_ingestion.drafts))
-    )
+    assert result["title"] == "Real Book Title"
+    sections = ingestion.last["sections"]
+    assert [s["heading"] for s in sections] == [None, "Chapter One", "Chapter Two"]
+    text = ingestion.last["text"]
+    assert [text[s["char_start"] : s["char_end"]] for s in sections] == [c.text for c in chapters]
 
 
 # --- P1: cache-path metadata + authoritative-expiry preservation -----------
 
 
 async def test_ingest_cache_path_carries_stored_author(env):
-    store, write_cached_text = env
+    context, _, store, write_cached_text = env
     write_cached_text("onc5689", "Four Views\n\nBody.")
     store.upsert(
-        library_id=LIBRARY_KEY,
-        book_id="onc5689",
-        title="Four Views",
-        author="Doe, Jane",
-        subjects=["Ecclesiology"],
-        description="<p>blurb</p>",
+        library_id=LIBRARY_KEY, book_id="onc5689", title="Four Views", author="Doe, Jane",
+        subjects=["Ecclesiology"], description="<p>blurb</p>",
     )
     ingestion = _FakeIngestion()
 
-    result = await mod.handler(book_id="onc5689", ingestion=ingestion)
+    result = await mod.handler(book_id="onc5689", ingestion=ingestion, context=context)
 
     assert result["status"] == "ingested"
-    assert ingestion.metadata["author"] == "Doe, Jane"
-    assert ingestion.metadata["subjects"] == ["Ecclesiology"]
-    assert ingestion.metadata["description"] == "<p>blurb</p>"
+    assert ingestion.last["metadata"]["author"] == "Doe, Jane"
+    assert ingestion.last["metadata"]["subjects"] == ["Ecclesiology"]
+    assert ingestion.last["metadata"]["description"] == "<p>blurb</p>"
     assert result["author"] == "Doe, Jane"
 
 
 async def test_ingest_preserves_authoritative_expiry(env):
-    store, write_cached_text = env
+    context, _, store, write_cached_text = env
     write_cached_text("onc5689", "Four Views\n\nBody.")
     store.upsert(
-        library_id=LIBRARY_KEY,
-        book_id="onc5689",
-        title="Four Views",
-        expires_at="2099-01-10T16:22:54Z",
-        expires_at_is_estimated=False,
+        library_id=LIBRARY_KEY, book_id="onc5689", title="Four Views",
+        expires_at="2099-01-10T16:22:54Z", expires_at_is_estimated=False,
     )
     ingestion = _FakeIngestion()
 
-    result = await mod.handler(book_id="onc5689", ingestion=ingestion)
+    result = await mod.handler(book_id="onc5689", ingestion=ingestion, context=context)
 
-    assert ingestion.metadata["expires_at"] == "2099-01-10T16:22:54Z"
-    assert ingestion.metadata["expires_at_is_estimated"] is False
+    assert ingestion.last["metadata"]["expires_at"] == "2099-01-10T16:22:54Z"
+    assert ingestion.last["metadata"]["expires_at_is_estimated"] is False
     assert result["expires_at"] == "2099-01-10T16:22:54Z"
-    assert result["expires_at_is_estimated"] is False
     record = store.get(LIBRARY_KEY, "onc5689")
     assert record["expires_at"] == "2099-01-10T16:22:54Z"
     assert record["expires_at_is_estimated"] is False
+
+
+# --- chapter_sections --------------------------------------------------------
+
+
+def test_chapter_sections_rejects_chapters_that_do_not_tile_the_text():
+    chapters = _chapters()
+    text = CHAPTER_SEPARATOR.join(c.text for c in chapters)
+    assert boundary.chapter_sections(text, chapters)
+    assert boundary.chapter_sections("different " + text, chapters) == []

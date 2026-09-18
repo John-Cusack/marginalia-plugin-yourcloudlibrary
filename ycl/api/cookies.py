@@ -12,11 +12,13 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import re
+import time
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
 from .._time import to_iso
-from .errors import NotAuthenticatedError
+from .errors import LOGIN_COMMAND, NotAuthenticatedError
 from .types import LibraryInfo
 
 SESSION_COOKIE = "__session_PROD"
@@ -87,7 +89,7 @@ def session_expiry_status(cookies: Iterable[dict], *, now: datetime) -> dict:
 
     Always returns the three ``session_*`` keys; adds ``session_warning`` when
     the session has expired or is within :data:`SESSION_WARN_DAYS` of doing so.
-    Shared by ``ycl.auth_status`` and ``ycl.list_books``.
+    Shared by ``yourcloudlibrary.auth_status`` and ``yourcloudlibrary.list_books``.
     """
     expiry = session_expiry(cookies)
     if expiry is None:
@@ -109,15 +111,88 @@ def session_expiry_status(cookies: Iterable[dict], *, now: datetime) -> dict:
     }
     if expired:
         out["session_warning"] = (
-            "Session has expired — re-run `python -m ycl.cli.login`."
+            f"Session has expired — re-run `{LOGIN_COMMAND}`."
         )
     elif days <= SESSION_WARN_DAYS:
         unit = "day" if days == 1 else "days"
         out["session_warning"] = (
-            f"Session expires in {days} {unit} — re-run "
-            "`python -m ycl.cli.login` soon."
+            f"Session expires in {days} {unit} — re-run `{LOGIN_COMMAND}` soon."
         )
     return out
+
+
+# What a secret looks like in an error message: a JWT (header ``eyJ``), a
+# credential-named URL parameter (SSO redirects carry ``code=``/``token=``), or a
+# long unbroken token run. Path and URL segments are split by ``/`` and ``.``, so
+# ordinary locations stay readable.
+_JWT = re.compile(r"eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*")
+_QUERY_SECRET = re.compile(
+    r"([?&#;](?:code|token|access_token|id_token|refresh_token|state|ticket|jwt|"
+    r"samlresponse|session[A-Za-z_]*)=)[^&#;\s]+",
+    re.IGNORECASE,
+)
+_LONG_TOKEN = re.compile(r"[A-Za-z0-9+_=%-]{40,}")
+
+
+def redact_secrets(text: str, cookies: Iterable[dict] = ()) -> str:
+    """Mask cookie values, JWTs, and long opaque tokens in text meant for output.
+
+    Error messages from the browser or HTTP layer can echo redirect URLs that
+    carry SSO codes or session tokens; nothing that reaches a terminal or log
+    should include them.
+    """
+    for cookie in cookies:
+        value = str(cookie.get("value") or "")
+        if len(value) >= 8:
+            text = text.replace(value, "<redacted>")
+    text = _JWT.sub("<redacted-jwt>", text)
+    text = _QUERY_SECRET.sub(r"\1<redacted>", text)
+    return _LONG_TOKEN.sub("<redacted>", text)
+
+
+def cookie_expiry(cookies: Iterable[dict], name: str) -> float | None:
+    """Return the ``expires`` epoch for *name*, or None if absent/session-cookie."""
+    cookie = _find_cookie(cookies, name)
+    if cookie is None:
+        return None
+    exp = cookie.get("expires")
+    if isinstance(exp, bool) or not isinstance(exp, (int, float)) or exp <= 0:
+        return None
+    return float(exp)
+
+
+def reading_session_status(cookies: Iterable[dict], *, now: float | None = None) -> dict:
+    """Whether the session can fetch book content (manifest/chapters).
+
+    ``epubservice.yourcloudlibrary.com`` strictly enforces ``__session_PROD``'s
+    cookie expiry (→ 401), while the catalog (``ebook.``) is lenient and keeps
+    serving search/borrow on a stale session — which masks the expiry. So "can I
+    borrow?" is NOT a reliable signal for "can I read/scrape?"; check the cookie's
+    own expiry instead. ``__session_PROD`` was measured at ~1 day.
+
+    ``ok`` is True only when ``__session_PROD`` is present AND not past its
+    ``expires``.
+    """
+    now = time.time() if now is None else now
+    cookies = list(cookies)
+    if _find_cookie(cookies, SESSION_COOKIE) is None:
+        return {
+            "ok": False,
+            "reason": "missing_session_cookie",
+            "detail": f"no {SESSION_COOKIE} cookie — run `{LOGIN_COMMAND}`.",
+        }
+    exp = cookie_expiry(cookies, SESSION_COOKIE)
+    if exp is not None and exp < now:
+        return {
+            "ok": False,
+            "reason": "session_expired",
+            "expires": exp,
+            "detail": (
+                f"{SESSION_COOKIE} expired — catalog search/borrow may still work but "
+                f"reading/ingest will 401. Re-run `{LOGIN_COMMAND}`."
+            ),
+        }
+    return {"ok": True, "reason": "ok", "expires": exp}
 
 
 def decode_config_cookie(cookies: Iterable[dict]) -> LibraryInfo:
@@ -129,7 +204,7 @@ def decode_config_cookie(cookies: Iterable[dict]) -> LibraryInfo:
     config = _find_cookie(cookies, "__config_PROD")
     if config is None:
         raise NotAuthenticatedError(
-            "__config_PROD cookie missing — run ycl.cli.login to authenticate."
+            f"__config_PROD cookie missing — run `{LOGIN_COMMAND}` to authenticate."
         )
     raw = _b64_padded_decode(str(config.get("value", "")))
     text = raw.decode("utf-8", errors="replace")

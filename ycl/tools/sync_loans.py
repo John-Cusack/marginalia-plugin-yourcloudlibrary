@@ -1,4 +1,4 @@
-"""ycl.sync_loans — pull the live list of active loans into BorrowStore.
+"""yourcloudlibrary.sync_loans — pull the live list of active loans into BorrowStore.
 
 Answers "what do I have out right now?" by hitting YCL's My-Books loans
 endpoint and writing the *real* ``expires_at`` (the loan's ``dueDate``) into
@@ -16,11 +16,14 @@ one write), rather than one rewrite per loan.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import structlog
-from research_engine.plugins.sdk import tool
+from research_engine_sdk import tool
 
 from .._config import ConfigError
 from .._config import load as load_config
+from .._paths import resolve_paths
 from .._time import days_until, from_iso, resolve_expires_at, to_iso, utcnow
 from ..api import (
     AuthExpiredError,
@@ -29,12 +32,13 @@ from ..api import (
     YclClient,
 )
 from ..borrows import BorrowStore
+from ._errors import LOGIN_HINT, RELOGIN_HINT
+from ._errors import err as _err
+
+if TYPE_CHECKING:
+    from research_engine_sdk import PluginContext
 
 log = structlog.get_logger(__name__)
-
-
-def _err(error_type: str, message: str, **extra) -> dict:
-    return {"status": "error", "error_type": error_type, "message": message, **extra}
 
 
 def _normalize_due_date(due_date: str) -> str | None:
@@ -63,13 +67,13 @@ def _normalize_due_date(due_date: str) -> str | None:
 
 
 @tool(
-    id="ycl.sync_loans",
+    id="yourcloudlibrary.sync_loans",
     description=(
         "Sync the list of currently-active YourCloudLibrary loans into the "
         "local borrow store, recording each loan's real expiration date "
         "(no estimation). Use this to answer 'what do I have checked out "
-        "right now?' and to refresh expiry dates before scraping. Requires "
-        "that you've run ycl.cli.login at least once."
+        "right now?' and to refresh expiry dates before scraping. Requires a "
+        "session from research-engine-ycl-login."
     ),
     input_schema={
         "type": "object",
@@ -77,6 +81,7 @@ def _normalize_due_date(due_date: str) -> str | None:
     },
 )
 async def handler(
+    context: PluginContext | None = None,
     **_clients,
 ) -> dict:
     try:
@@ -84,18 +89,15 @@ async def handler(
     except ConfigError as exc:
         return _err("config", str(exc))
 
+    paths = resolve_paths(context)
     try:
-        client = YclClient.from_cookie_store()
+        client = YclClient.from_cookie_store(paths.cookie_path)
     except NotAuthenticatedError as exc:
-        return _err(
-            "not_authenticated",
-            str(exc),
-            hint="Run `uv run python -m ycl.cli.login` once.",
-        )
+        return _err("not_authenticated", str(exc), hint=LOGIN_HINT)
 
     library_key = client.library.url_name or "unknown"
     library_name = client.library.name
-    store = BorrowStore()
+    store = BorrowStore(paths.borrows_path)
     now = utcnow()
     now_iso = to_iso(now)
 
@@ -103,9 +105,7 @@ async def handler(
         async with client:
             loans = await client.get_loans()
     except AuthExpiredError as exc:
-        return _err(
-            "auth_expired", str(exc), hint="Re-run `python -m ycl.cli.login`."
-        )
+        return _err("auth_expired", str(exc), hint=RELOGIN_HINT)
     except YclApiError as exc:
         log.exception("sync_loans_api_error", error=str(exc))
         return _err("api_error", str(exc))

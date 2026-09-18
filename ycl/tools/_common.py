@@ -14,7 +14,7 @@ def effective_expires_at(
       1. ``explicit`` — a caller-supplied value always wins.
       2. The stored ``expires_at`` *only* when it is authoritative
          (``expires_at_is_estimated`` is falsy) — e.g. a real ``dueDate`` that
-         ``ycl.sync_loans`` previously wrote. This stops scrape/ingest from
+         ``yourcloudlibrary.sync_loans`` previously wrote. This stops scrape/ingest from
          clobbering it back to an estimate.
       3. ``None`` — let the caller fall back to its own estimate.
     """

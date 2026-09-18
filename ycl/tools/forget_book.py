@@ -1,4 +1,4 @@
-"""ycl.forget_book — remove a borrow record from the local store.
+"""yourcloudlibrary.forget_book — remove a borrow record from the local store.
 
 Does NOT delete corpus passages or on-disk text. The user can re-add the
 book later via record_borrow / scrape_book without any cleanup.
@@ -6,14 +6,20 @@ book later via record_borrow / scrape_book without any cleanup.
 
 from __future__ import annotations
 
-from research_engine.plugins.sdk import tool
+from typing import TYPE_CHECKING
 
+from research_engine_sdk import tool
+
+from .._paths import resolve_paths
 from ..borrows import BorrowStore
 from ._errors import load_library
 
+if TYPE_CHECKING:
+    from research_engine_sdk import PluginContext
+
 
 @tool(
-    id="ycl.forget_book",
+    id="yourcloudlibrary.forget_book",
     description=(
         "Remove a borrow record from the local store. Does not delete corpus "
         "passages or on-disk extracted text — those are kept so the captured "
@@ -32,12 +38,14 @@ from ._errors import load_library
 )
 async def handler(
     book_id: str,
+    context: PluginContext | None = None,
     **_clients,
 ) -> dict:
-    info, _ = load_library()
+    paths = resolve_paths(context)
+    info, _ = load_library(paths)
     library_key = (info.url_name or "unknown") if info else "unknown"
 
-    store = BorrowStore()
+    store = BorrowStore(paths.borrows_path)
     removed = store.forget(library_key, book_id)
     return {
         "status": "forgotten" if removed else "not_found",

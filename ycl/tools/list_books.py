@@ -1,19 +1,24 @@
-"""ycl.list_books — list known borrows for the current library."""
+"""yourcloudlibrary.list_books — list known borrows for the current library."""
 
 from __future__ import annotations
 
-from research_engine.plugins.sdk import tool
+from typing import TYPE_CHECKING
 
-from .._paths import COOKIE_PATH
+from research_engine_sdk import tool
+
+from .._paths import resolve_paths
 from .._time import utcnow
 from ..api.cookies import decode_config_cookie, session_expiry_status
 from ..api.errors import NotAuthenticatedError
 from ..borrows import BorrowStore
 from ..session.cookies import CookieStore
 
+if TYPE_CHECKING:
+    from research_engine_sdk import PluginContext
+
 
 @tool(
-    id="ycl.list_books",
+    id="yourcloudlibrary.list_books",
     description=(
         "List YCL books known to the plugin for the current library. Active "
         "loans by default; pass include_expired=true to see everything."
@@ -31,9 +36,11 @@ from ..session.cookies import CookieStore
 )
 async def handler(
     include_expired: bool = False,
+    context: PluginContext | None = None,
     **_clients,
 ) -> dict:
-    cookies = CookieStore(COOKIE_PATH).load()
+    paths = resolve_paths(context)
+    cookies = CookieStore(paths.cookie_path).load()
     library_key = "unknown"
     library_name: str | None = None
     if cookies:
@@ -44,7 +51,7 @@ async def handler(
         except NotAuthenticatedError:
             pass
 
-    store = BorrowStore()
+    store = BorrowStore(paths.borrows_path)
     now = utcnow()
     records = store.list(library_key)
 

@@ -1,39 +1,38 @@
-"""ycl.scrape_book — scrape a borrowed book to disk and record the loan."""
+"""yourcloudlibrary.scrape_book — scrape a borrowed book to disk and record the loan."""
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import structlog
-from research_engine.plugins.sdk import tool
+from research_engine_sdk import tool
 
 from .._config import ConfigError
 from .._config import load as load_config
-from .._paths import text_path_for
+from .._paths import resolve_paths
 from .._textcache import write_text_cache
 from .._time import resolve_expires_at, to_iso, utcnow
-from ..api import (
-    AuthExpiredError,
-    BookNotBorrowedError,
-    YclApiError,
-)
-from ..api import (
-    scrape_book as api_scrape_book,
-)
+from ..api import AuthExpiredError, BookNotBorrowedError, YclApiError
+from ..api import scrape_book as api_scrape_book
 from ..borrows import BorrowStore
 from ._common import effective_expires_at
 from ._errors import RELOGIN_HINT, acquire_client
 from ._errors import err as _err
 
+if TYPE_CHECKING:
+    from research_engine_sdk import PluginContext
+
 log = structlog.get_logger(__name__)
 
 
 @tool(
-    id="ycl.scrape_book",
+    id="yourcloudlibrary.scrape_book",
     description=(
         "Scrape a borrowed YourCloudLibrary book via the YCL API and save the "
         "plain-text content to disk. Records the borrow in the local store so "
-        "expiration can be tracked. Requires that you've run ycl.cli.login at "
-        "least once. Does NOT ingest into the corpus — use ycl.ingest_book for "
-        "that."
+        "expiration can be tracked. Requires a session from "
+        "research-engine-ycl-login. Does NOT ingest into the corpus — use "
+        "yourcloudlibrary.ingest_book for that."
     ),
     input_schema={
         "type": "object",
@@ -77,6 +76,7 @@ async def handler(
     borrowed_at: str | None = None,
     title: str | None = None,
     concurrency: int = 4,
+    context: PluginContext | None = None,
     **_clients,
 ) -> dict:
     try:
@@ -84,12 +84,13 @@ async def handler(
     except ConfigError as exc:
         return _err("config", str(exc))
 
-    client, error = acquire_client()
+    paths = resolve_paths(context)
+    client, error = acquire_client(paths)
     if error:
         return error
 
     library_key = client.library.url_name or "unknown"
-    store = BorrowStore()
+    store = BorrowStore(paths.borrows_path)
     now = utcnow()
 
     try:
@@ -122,10 +123,10 @@ async def handler(
             chapter_count=result.chapter_count,
         )
 
-    write_text_cache(library_key, book_id, result)
-    text_path = text_path_for(library_key, book_id)
+    write_text_cache(paths, library_key, book_id, result)
+    text_path = paths.text_path_for(library_key, book_id)
 
-    # Don't clobber an authoritative expiry (e.g. one ycl.sync_loans wrote)
+    # Don't clobber an authoritative expiry (e.g. one yourcloudlibrary.sync_loans wrote)
     # with a fresh estimate when the caller didn't pass an explicit value.
     existing_record = store.get(library_key, book_id)
     resolved_expires_at, estimated = resolve_expires_at(

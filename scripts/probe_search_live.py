@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 from playwright.async_api import async_playwright
 
-from ycl._paths import COOKIE_PATH
+from ycl._paths import resolve_paths
 from ycl.api.cookies import decode_config_cookie
 from ycl.session.cookies import CookieStore
 
@@ -39,7 +39,7 @@ def _to_pw_cookies(raw: list[dict]) -> list[dict]:
 
 
 async def main() -> None:
-    raw = CookieStore(COOKIE_PATH).load()
+    raw = CookieStore(resolve_paths().cookie_path).load()
     lib = decode_config_cookie(raw)
     slug = lib.url_name
     log: list[dict] = []

@@ -1,11 +1,11 @@
 """On-disk cache for scraped book text plus a chapter-structure sidecar.
 
 The ``{book_id}.txt`` file stays the canonical, human-readable extract (it's
-what the README documents and what ``ycl.check_book`` reports). Alongside it we
+what the README documents and what ``yourcloudlibrary.check_book`` reports). Alongside it we
 persist a compact ``{book_id}.chapters.json`` sidecar recording the book title
 and per-chapter ``index``/``href``/``title``/``length``.
 
-Why: ``ycl.ingest_book`` reuses the cached ``.txt`` instead of re-scraping, so
+Why: ``yourcloudlibrary.ingest_book`` reuses the cached ``.txt`` instead of re-scraping, so
 without the sidecar a re-ingest would chunk a flat blob and lose the
 ``chapter_index``/``chapter_title`` passage metadata (and the real title). The
 sidecar lets the cached path rebuild the exact :class:`~ycl.api.types.Chapter`
@@ -20,21 +20,23 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from ._paths import chapters_path_for, text_path_for
 from .api.scraper import chapter_specs, chapters_from_specs
 
 if TYPE_CHECKING:
+    from ._paths import PluginPaths
     from .api.types import Chapter, ScrapeResult
 
 log = structlog.get_logger(__name__)
 
 
-def write_text_cache(library_id: str, book_id: str, result: ScrapeResult) -> None:
+def write_text_cache(
+    paths: PluginPaths, library_id: str, book_id: str, result: ScrapeResult
+) -> None:
     """Write the flat-text cache and its chapter-structure sidecar."""
-    text_path = text_path_for(library_id, book_id)
+    text_path = paths.text_path_for(library_id, book_id)
     text_path.parent.mkdir(parents=True, exist_ok=True)
     text_path.write_text(result.text, encoding="utf-8")
-    chapters_path_for(library_id, book_id).write_text(
+    paths.chapters_path_for(library_id, book_id).write_text(
         json.dumps(
             {"title": result.title, "chapters": chapter_specs(result.chapters)}
         ),
@@ -43,14 +45,14 @@ def write_text_cache(library_id: str, book_id: str, result: ScrapeResult) -> Non
 
 
 def read_chapter_sidecar(
-    library_id: str, book_id: str, text: str
+    paths: PluginPaths, library_id: str, book_id: str, text: str
 ) -> tuple[str | None, list[Chapter]]:
     """Reconstruct ``(title, chapters)`` from the sidecar for cached ``text``.
 
     Returns ``(None, [])`` when no (or an unreadable) sidecar exists, so the
     caller degrades to flat-text chunking for pre-sidecar caches.
     """
-    path = chapters_path_for(library_id, book_id)
+    path = paths.chapters_path_for(library_id, book_id)
     if not path.exists():
         return None, []
     try:

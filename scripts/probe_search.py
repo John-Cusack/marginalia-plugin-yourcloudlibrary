@@ -14,7 +14,7 @@ import json
 
 import httpx
 
-from ycl._paths import COOKIE_PATH
+from ycl._paths import resolve_paths
 from ycl.api.client import EBOOK_HOST, EPUB_ORIGIN
 from ycl.api.cookies import cookies_to_jar, decode_config_cookie
 from ycl.session.cookies import CookieStore
@@ -43,7 +43,7 @@ async def _probe(client: httpx.AsyncClient, url: str, params: dict) -> None:
 
 
 async def main() -> None:
-    cookies = CookieStore(COOKIE_PATH).load()
+    cookies = CookieStore(resolve_paths().cookie_path).load()
     lib = decode_config_cookie(cookies)
     jar = cookies_to_jar(cookies)
     slug = lib.url_name

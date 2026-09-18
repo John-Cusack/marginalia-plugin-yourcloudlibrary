@@ -1,0 +1,252 @@
+# Runtime contract for core. Core reads this file from the installed wheel
+# WITHOUT importing the plugin, shows it at `research-engine plugin audit` /
+# `enable`, and records its SHA-256 with the approval. Package identity, version,
+# and Python dependencies live in pyproject.toml, not here.
+#
+# Every input_schema below must equal the matching handler's @tool schema;
+# tests/contract/test_manifest.py enforces it.
+
+schema_version: 2
+plugin_id: yourcloudlibrary
+
+requires:
+  core_api: '>=0.6,<0.7'
+  python: '>=3.11'
+
+# In-process network egress goes to ebook. (detail, borrow/return, loans, catalog
+# search) and epubservice. (manifests and chapter content); www. is the login start
+# page. The Chromium subprocess used for login and catalog search also loads each
+# page's own subresources and your library's sign-in provider, which core does not
+# mediate. `subprocess` covers that browser. Extracted book text is licensed
+# content: it stays in the plugin data directory and must never be published.
+permissions:
+  network: egress
+  network_allowlist:
+  - ebook.yourcloudlibrary.com
+  - epubservice.yourcloudlibrary.com
+  - www.yourcloudlibrary.com
+  subprocess: true
+  filesystem: plugin_data
+  ingest: true
+
+provides:
+  document_types:
+  - id: ycl_book
+    default_chunker: prose_window
+  mcp_tools:
+  - id: yourcloudlibrary.auth_status
+    entry: ycl.tools.auth_status:handler
+    description: Report whether the plugin has YCL session cookies; tells the user how to log in if
+      not.
+    input_schema:
+      type: object
+      properties: {}
+  - id: yourcloudlibrary.search_catalog
+    entry: ycl.tools.search_catalog:handler
+    description: Search the entire YourCloudLibrary catalog by title/author/topic. Read-only; returns
+      availability + documentId.
+    input_schema:
+      type: object
+      properties:
+        query:
+          type: string
+          description: Title, author, or topic.
+        limit:
+          type: integer
+          default: 20
+          minimum: 1
+          maximum: 50
+          description: Maximum number of results to return.
+        available_only:
+          type: boolean
+          default: false
+          description: Only return titles with a copy available to borrow right now.
+      required:
+      - query
+  - id: yourcloudlibrary.scrape_book
+    entry: ycl.tools.scrape_book:handler
+    description: Scrape a borrowed book from YourCloudLibrary via the YCL API and save plain text
+      to disk.
+    input_schema:
+      type: object
+      properties:
+        book_id:
+          type: string
+          description: The book id from the reader/detail URL (e.g. 'onc5689').
+        expires_at:
+          type:
+          - string
+          - 'null'
+          default: null
+          description: ISO 8601 UTC timestamp of loan expiration. Read off the YCL UI when possible
+            — preferred over borrow_days.
+        borrowed_at:
+          type:
+          - string
+          - 'null'
+          default: null
+          description: ISO 8601 UTC timestamp of when the loan started.
+        title:
+          type:
+          - string
+          - 'null'
+          default: null
+          description: Override the title returned from the API.
+        concurrency:
+          type: integer
+          default: 4
+          minimum: 1
+          maximum: 16
+          description: Parallel chapter fetches. 4 is brisk and polite.
+      required:
+      - book_id
+  - id: yourcloudlibrary.ingest_book
+    entry: ycl.tools.ingest_book:handler
+    description: Scrape (if needed) and ingest a borrowed book into the corpus by book_id. Idempotent.
+    input_schema:
+      type: object
+      properties:
+        book_id:
+          type: string
+          description: The catalog documentId / reader book id (e.g. 'onc5689').
+        rescrape:
+          type: boolean
+          default: false
+          description: If true, fetch fresh from the API even if a cached text file exists on disk.
+        force_reingest:
+          type: boolean
+          default: false
+          description: If true, ingest even if a document for this book already exists. Core still
+            deduplicates identical content from the same source.
+        expires_at:
+          type:
+          - string
+          - 'null'
+          default: null
+          description: ISO 8601 UTC loan expiry, if known. Overrides the stored/estimated one.
+        borrowed_at:
+          type:
+          - string
+          - 'null'
+          default: null
+          description: ISO 8601 UTC time the loan started, if known.
+        title:
+          type:
+          - string
+          - 'null'
+          default: null
+          description: Override the document title.
+        concurrency:
+          type: integer
+          default: 4
+          minimum: 1
+          maximum: 16
+          description: Parallel chapter fetches when scraping.
+      required:
+      - book_id
+  - id: yourcloudlibrary.check_book
+    entry: ycl.tools.check_book:handler
+    description: Check borrow status, expiration, scrape state, and ingestion state for a book.
+    input_schema:
+      type: object
+      properties:
+        book_id:
+          type: string
+          description: The book id to check.
+        live:
+          type: boolean
+          default: true
+          description: If true (default), call the YCL API for current loan status. If false, only
+            consult the local borrow store.
+      required:
+      - book_id
+  - id: yourcloudlibrary.sync_loans
+    entry: ycl.tools.sync_loans:handler
+    description: Sync currently-active loans into the borrow store with their real expiration dates.
+      Answers 'what do I have out right now?'.
+    input_schema:
+      type: object
+      properties: {}
+  - id: yourcloudlibrary.list_books
+    entry: ycl.tools.list_books:handler
+    description: List known borrows for the current library (active by default).
+    input_schema:
+      type: object
+      properties:
+        include_expired:
+          type: boolean
+          default: false
+          description: Include borrows whose expires_at is in the past.
+  - id: yourcloudlibrary.record_borrow
+    entry: ycl.tools.record_borrow:handler
+    description: Register a newly borrowed book with its expiration date, without scraping.
+    input_schema:
+      type: object
+      properties:
+        book_id:
+          type: string
+          description: The book id from the reader/detail URL.
+        title:
+          type:
+          - string
+          - 'null'
+          default: null
+          description: Optional title for the borrow record.
+        expires_at:
+          type:
+          - string
+          - 'null'
+          default: null
+          description: ISO 8601 UTC timestamp of loan expiration.
+        borrowed_at:
+          type:
+          - string
+          - 'null'
+          default: null
+          description: ISO 8601 UTC timestamp of when the loan started.
+      required:
+      - book_id
+  - id: yourcloudlibrary.forget_book
+    entry: ycl.tools.forget_book:handler
+    description: Remove a borrow record from the local store. Does not delete corpus passages.
+    input_schema:
+      type: object
+      properties:
+        book_id:
+          type: string
+          description: The book id whose borrow record to remove.
+      required:
+      - book_id
+  - id: yourcloudlibrary.acquire_and_ingest
+    entry: ycl.tools.acquire_and_ingest:handler
+    description: Borrow a catalog book by documentId, scrape+ingest it, then return the loan to free
+      a slot (recycling).
+    input_schema:
+      type: object
+      properties:
+        book_id:
+          type: string
+          description: The catalog documentId (e.g. 'onc5689') from yourcloudlibrary.search_catalog or search_sources.
+            NOT the search 'id'/'bibliographicIdentifier'.
+        return_after:
+          type: boolean
+          default: true
+          description: Return a loan this call opened once ingest finishes, successful or not, to
+            free the slot. Set false to keep the book borrowed. A loan you already had is never returned.
+        force_reingest:
+          type: boolean
+          default: false
+          description: Borrow and ingest even if a document for this book already exists.
+        concurrency:
+          type: integer
+          default: 4
+          minimum: 1
+          maximum: 16
+          description: Parallel chapter fetches when scraping.
+      required:
+      - book_id
+  source_search:
+  - id: yourcloudlibrary
+    entry: ycl.source_provider:YclSourceProvider
+    description: 'Whole-catalog discovery for YourCloudLibrary: maps a query to borrowable/purchasable
+      matches with ingest actions.'
