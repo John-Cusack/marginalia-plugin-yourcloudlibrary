@@ -2,7 +2,7 @@
 
 All notable changes to this plugin. Versions follow PEP 440.
 
-## 0.3.0 — unreleased
+## 0.3.0 — 2026-09-18
 
 Requires `marginalia-ai` 0.6.x and `marginalia-ai-sdk` 0.6.x. This is a clean
 cutover; see "Upgrading from 0.2.x" in the README.
