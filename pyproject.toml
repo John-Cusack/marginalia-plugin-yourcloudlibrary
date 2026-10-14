@@ -1,6 +1,6 @@
 [project]
 name = "marginalia-ai-plugin-yourcloudlibrary"
-version = "0.3.0"
+version = "0.3.1"
 description = "YourCloudLibrary catalog search and borrowed-book ingestion for Research Engine"
 readme = "README.md"
 requires-python = ">=3.11"
