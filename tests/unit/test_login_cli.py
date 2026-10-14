@@ -161,8 +161,8 @@ def test_start_url_prefers_named_then_saved_library(plugin_paths):
 def test_run_uses_data_dir_flag(monkeypatch, tmp_path):
     seen = {}
 
-    async def fake_login(paths, *, library=None):
-        seen["paths"], seen["library"] = paths, library
+    async def fake_login(paths, *, library=None, headless=False):
+        seen["paths"], seen["library"], seen["headless"] = paths, library, headless
         return 0
 
     monkeypatch.setattr(cli, "login", fake_login)
@@ -180,3 +180,25 @@ def test_run_rejects_non_urlname_library():
 def test_main_is_a_zero_argument_sync_wrapper(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["research-engine-ycl-login", "migrate", "--from", "/nonexistent-ycl"])
     assert cli.main() == 0  # nothing to migrate
+
+
+def test_headless_flag_reaches_browser_launch(monkeypatch, plugin_paths):
+    browser = _FakeBrowser([_config_cookie(), _session_cookie()])
+    launches = _install_playwright(monkeypatch, browser=browser)
+
+    assert asyncio.run(cli.login(plugin_paths, headless=True)) == 0
+
+    assert launches[0]["headless"] is True
+    assert browser.closed
+
+
+def test_run_passes_headless_flag(monkeypatch, tmp_path):
+    seen = {}
+
+    async def fake_login(paths, *, library=None, headless=False):
+        seen["headless"] = headless
+        return 0
+
+    monkeypatch.setattr(cli, "login", fake_login)
+    assert cli.run(["--data-dir", str(tmp_path), "--headless"]) == 0
+    assert seen["headless"] is True

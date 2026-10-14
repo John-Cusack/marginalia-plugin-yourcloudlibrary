@@ -2,6 +2,15 @@
 
 All notable changes to this plugin. Versions follow PEP 440.
 
+## 0.3.1 — 2026-10-14
+
+### Added
+
+- `research-engine-ycl-login --headless`: launch the capture browser
+  headless. Headed stays the default; headless still polls for the session
+  cookies, so the sign-in can be driven another way (DevTools endpoint,
+  scripted form fill) on machines with no display.
+
 ## 0.3.0 — 2026-09-18
 
 Requires `marginalia-ai` 0.6.x and `marginalia-ai-sdk` 0.6.x. This is a clean
