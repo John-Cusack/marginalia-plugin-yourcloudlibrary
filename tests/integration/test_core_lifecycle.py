@@ -132,7 +132,7 @@ def test_3_enable_records_version_hash_and_permissions(cli):
     cli.run("plugin", "enable", PLUGIN_ID, "--yes")
     audit = cli.run("plugin", "audit", PLUGIN_ID)
     assert "enabled" in audit.lower()
-    assert "0.3.0" in audit
+    assert "0.3.1" in audit
     assert hashlib.sha256(_installed_manifest().read_bytes()).hexdigest() in audit
 
 

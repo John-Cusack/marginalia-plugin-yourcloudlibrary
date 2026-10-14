@@ -63,7 +63,7 @@ def plugin_context(tmp_path):
         plugin_id="yourcloudlibrary",
         data_dir=tmp_path / "plugin-data",
         distribution_name="marginalia-ai-plugin-yourcloudlibrary",
-        distribution_version="0.3.0",
+        distribution_version="0.3.1",
     )
 
 
