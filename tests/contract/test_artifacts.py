@@ -60,7 +60,7 @@ def _dist_info(wheel: zipfile.ZipFile, name: str) -> str:
 
 def test_wheel_names_match_distribution(dist):
     (path,) = dist.glob("*.whl")
-    assert path.name.startswith("marginalia_ai_plugin_yourcloudlibrary-0.3.0-py3-none-any")
+    assert path.name.startswith("marginalia_ai_plugin_yourcloudlibrary-0.3.1-py3-none-any")
 
 
 def test_wheel_ships_manifest_and_every_entry_module(wheel):
@@ -76,7 +76,7 @@ def test_wheel_ships_manifest_and_every_entry_module(wheel):
 
 def test_wheel_contains_only_the_plugin_package(wheel):
     top_level = {name.split("/", 1)[0] for name in wheel.namelist()}
-    assert top_level == {"ycl", "marginalia_ai_plugin_yourcloudlibrary-0.3.0.dist-info"}
+    assert top_level == {"ycl", "marginalia_ai_plugin_yourcloudlibrary-0.3.1.dist-info"}
 
 
 def test_no_sensitive_or_local_files_in_artifacts(wheel, sdist_names):
@@ -102,7 +102,7 @@ def test_entry_points_advertise_plugin_and_login(wheel):
 def test_metadata_is_complete(wheel):
     meta = email.parser.Parser().parsestr(_dist_info(wheel, "METADATA"))
     assert meta["Name"] == "marginalia-ai-plugin-yourcloudlibrary"
-    assert meta["Version"] == "0.3.0"
+    assert meta["Version"] == "0.3.1"
     assert meta["Requires-Python"] == ">=3.11"
     assert meta["License-Expression"] == "Apache-2.0"
     assert meta.get_all("License-File") == ["LICENSE"]
