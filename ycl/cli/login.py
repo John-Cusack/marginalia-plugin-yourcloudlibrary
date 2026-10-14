@@ -3,10 +3,10 @@
 Run it once after installing the plugin, and again whenever reading stops
 working (the reading cookie lasts about a day)::
 
-    research-engine-ycl-login [--library URL_NAME] [--data-dir DIR]
+    research-engine-ycl-login [--library URL_NAME] [--data-dir DIR] [--headless]
     research-engine-ycl-login migrate [--help]
 
-A visible Chromium window opens. Sign in to your library however you normally
+A visible Chromium window opens (unless --headless). Sign in to your library however you normally
 do. The command polls every few seconds for the YCL session cookies; when they
 appear it validates them, saves them (0600) under the plugin data directory, and
 closes the browser. Nothing is read from stdin and no password is stored.
@@ -88,11 +88,19 @@ def run(argv: list[str]) -> int:
         type=Path,
         help="Plugin data directory (default: the one core passes to the plugin).",
     )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Launch Chromium headless (default is a visible window). Headless "
+        "still needs the sign-in completed another way — e.g. drive the login "
+        "page through the browser's DevTools endpoint while this command polls "
+        "for the session cookies.",
+    )
     args = parser.parse_args(argv)
     if args.library and not _URL_NAME.match(args.library):
         parser.error("--library must be a urlName: letters, digits, '-' or '_'.")
     paths = PluginPaths(args.data_dir.expanduser() if args.data_dir else default_data_dir())
-    return asyncio.run(login(paths, library=args.library))
+    return asyncio.run(login(paths, library=args.library, headless=args.headless))
 
 
 def start_url(paths: PluginPaths, library: str | None) -> str:
@@ -115,6 +123,7 @@ async def login(
     *,
     library: str | None = None,
     timeout_seconds: float = LOGIN_TIMEOUT_SECONDS,
+    headless: bool = False,
 ) -> int:
     try:
         from playwright.async_api import async_playwright
@@ -130,7 +139,7 @@ async def login(
     async with async_playwright() as pw:
         try:
             browser = await pw.chromium.launch(
-                headless=False,
+                headless=headless,
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--no-first-run",
